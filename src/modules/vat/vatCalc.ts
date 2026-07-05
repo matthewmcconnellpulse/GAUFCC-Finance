@@ -114,8 +114,13 @@ export function calculatePartialExemption(input: VatCalcInput): VatCalcResult {
   // next whole percent (Notice 706 s4.7). With no supplies at all the ratio is
   // undefined — we default to 100% taxable, i.e. no evidenced exempt activity,
   // so nothing is restricted by an accident of an empty period.
+  // The 1e-9 epsilon strips floating-point noise so an exact whole percent
+  // (e.g. £110k / £200k = 55%) is not rounded up to 56% by an artefact like
+  // 55.00000000000001.
   const recoveryPct =
-    totalSupplies > 0 ? Math.min(100, Math.ceil((taxable / totalSupplies) * 100)) : 100
+    totalSupplies > 0
+      ? Math.min(100, Math.ceil((taxable / totalSupplies) * 100 - 1e-9))
+      : 100
 
   // Apportion the residual pot. The exempt share is the remainder so the two
   // halves always sum back to the residual figure exactly.

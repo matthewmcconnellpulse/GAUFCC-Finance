@@ -338,7 +338,10 @@ async function lastSuccessfulRunStart(svc: SupabaseClient): Promise<string | und
     .limit(1)
   if (error) throw new Error(`Could not read sync_runs: ${error.message}`)
   const last = data?.[0]?.started_at as string | undefined
-  return last ? new Date(last).toUTCString() : undefined
+  // Xero expects If-Modified-Since as ISO 8601 UTC without a zone suffix
+  // (e.g. 2026-06-01T09:30:00) — RFC 1123 strings are silently ignored,
+  // which would turn every sync into a full pull.
+  return last ? new Date(last).toISOString().slice(0, 19) : undefined
 }
 
 async function syncAccounts(svc: SupabaseClient, modifiedSince?: string): Promise<number> {
@@ -520,7 +523,9 @@ async function syncInvoices(
   const invoices = await fetchAllPages<XeroInvoiceApi>(
     'Invoices',
     'Invoices',
-    { where: 'Status!="DELETED"' },
+    // VOIDED must be excluded too: a voided bill still passes a DELETED-only
+    // filter and would wrongly move fund balances in the mirror.
+    { where: 'Status!="DELETED"&&Status!="VOIDED"' },
     modifiedSince,
   )
   const rows: TransactionRow[] = []
@@ -625,7 +630,7 @@ async function syncCreditNotes(
   const creditNotes = await fetchAllPages<XeroCreditNoteApi>(
     'CreditNotes',
     'CreditNotes',
-    { where: 'Status!="DELETED"' },
+    { where: 'Status!="DELETED"&&Status!="VOIDED"' },
     modifiedSince,
   )
   const rows: TransactionRow[] = []

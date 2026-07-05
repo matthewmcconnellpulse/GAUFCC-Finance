@@ -39,9 +39,14 @@ by hand, and never put the service-role key anywhere else.
 2. **New app** → choose **Custom connection** (not "Web app"). Custom
    connections are Xero's machine-to-machine product: one app = one
    organisation, no OAuth redirect dance, tokens via `client_credentials`.
-3. Scopes to tick: `accounting.transactions` (read/write — bills push),
-   `accounting.contacts`, `accounting.settings.read` (accounts + tracking
-   categories), `accounting.reports.read`.
+3. Scopes to tick — exactly these three, nothing more (least privilege):
+   - `accounting.transactions` (read/write — mirrors invoices/bills/bank
+     transactions and pushes approved-expense bills)
+   - `accounting.contacts` (read/write — supplier lookup/creation on bill push)
+   - `accounting.settings.read` (chart of accounts + tracking categories,
+     where the funds live)
+   No journals, payments, budgets or reports scopes — the platform builds its
+   own reports from the mirror and never posts journals or payments.
 4. Select the authorising user; they'll get an email to authorise the
    connection against the GAUFCC organisation.
 5. Copy the **Client ID** and generate a **Client Secret** → save both as
