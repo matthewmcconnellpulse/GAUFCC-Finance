@@ -21,11 +21,19 @@
  * they remain visible to the integrity screens.
  *
  * ── Sign convention (money) ──────────────────────────────────────────────────
- * net/vat/gross are SIGNED: money into the charity is positive, money out is
- * negative. fund balance = funds.opening_balance + Σ net.
- *   ACCREC +  · ACCPAY −  · RECEIVE + · SPEND − ·
- *   RECEIVE-TRANSFER/-PREPAYMENT/-OVERPAYMENT + · SPEND-… − ·
- *   ACCRECCREDIT − (reduces income) · ACCPAYCREDIT + (reduces expenditure).
+ * net/vat/gross are stored DOCUMENT-NATURAL — this is the contract the
+ * deployed views (0005/0012) rely on: invoices and bank lines are stored
+ * POSITIVE, and income vs expenditure is decided downstream by the account's
+ * class (REVENUE → income, EXPENSE → expenditure). Credit notes are stored
+ * NEGATIVE so they reduce the movement on their account's class.
+ *   fund balance = opening_balance + Σ(REVENUE net) − Σ(EXPENSE net).
+ *   ACCREC +  · ACCPAY +  · RECEIVE + · SPEND + · transfers + ·
+ *   ACCRECCREDIT − (reduces income) · ACCPAYCREDIT − (reduces expenditure,
+ *   because the view subtracts EXPENSE net and −(−x) adds it back).
+ * Worked example: a £100 bill (ACCPAY, EXPENSE) stores net +100 → balance
+ * −100; a £100 supplier credit (ACCPAYCREDIT, EXPENSE) stores net −100 →
+ * balance −(−100) = +100; a £200 sales invoice (ACCREC, REVENUE) stores +200
+ * → balance +200. All consistent with v_fund_balances.
  *
  * ── source_type mapping ──────────────────────────────────────────────────────
  *   Invoices Type ACCREC → 'ACCREC', ACCPAY → 'ACCPAY'.
@@ -517,7 +525,9 @@ async function syncInvoices(
   )
   const rows: TransactionRow[] = []
   for (const inv of invoices) {
-    const sign: 1 | -1 = inv.Type === 'ACCREC' ? 1 : -1
+    // Document-natural: both sales invoices (ACCREC/REVENUE) and bills
+    // (ACCPAY/EXPENSE) store positive; the view separates them by account class.
+    const sign: 1 | -1 = 1
     rows.push(
       ...flattenDocument({
         docId: inv.InvoiceID,
@@ -540,21 +550,25 @@ async function syncInvoices(
 }
 
 function mapBankTransactionType(type: string): { source: SourceType; sign: 1 | -1 } | null {
+  // Document-natural sign: bank lines store positive; the view's account-class
+  // filter (EXPENSE vs REVENUE) decides whether a line reduces or grows the
+  // fund balance. SPEND lines are almost always coded to EXPENSE accounts and
+  // are therefore subtracted by v_fund_balances.
   switch (type) {
     case 'SPEND':
-      return { source: 'SPEND', sign: -1 }
+      return { source: 'SPEND', sign: 1 }
     case 'RECEIVE':
       return { source: 'RECEIVE', sign: 1 }
     case 'SPEND-TRANSFER':
-      return { source: 'BANK_TRANSFER', sign: -1 }
+      return { source: 'BANK_TRANSFER', sign: 1 }
     case 'RECEIVE-TRANSFER':
       return { source: 'BANK_TRANSFER', sign: 1 }
     case 'SPEND-PREPAYMENT':
-      return { source: 'PREPAYMENT', sign: -1 }
+      return { source: 'PREPAYMENT', sign: 1 }
     case 'RECEIVE-PREPAYMENT':
       return { source: 'PREPAYMENT', sign: 1 }
     case 'SPEND-OVERPAYMENT':
-      return { source: 'OVERPAYMENT', sign: -1 }
+      return { source: 'OVERPAYMENT', sign: 1 }
     case 'RECEIVE-OVERPAYMENT':
       return { source: 'OVERPAYMENT', sign: 1 }
     default:
@@ -616,8 +630,11 @@ async function syncCreditNotes(
   )
   const rows: TransactionRow[] = []
   for (const cn of creditNotes) {
-    // ACCRECCREDIT reduces income (−), ACCPAYCREDIT reduces expenditure (+).
-    const sign: 1 | -1 = cn.Type === 'ACCRECCREDIT' ? -1 : 1
+    // Both credit-note types store NEGATIVE: a sales credit (ACCRECCREDIT,
+    // REVENUE account) reduces income; a supplier credit (ACCPAYCREDIT,
+    // EXPENSE account) reduces expenditure because the view subtracts EXPENSE
+    // net and −(−x) adds it back to the balance.
+    const sign: 1 | -1 = -1
     rows.push(
       ...flattenDocument({
         docId: cn.CreditNoteID,
