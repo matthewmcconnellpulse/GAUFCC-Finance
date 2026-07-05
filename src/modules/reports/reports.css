@@ -1,0 +1,52 @@
+/*
+ * Reports module print plumbing. The pack preview renders through a portal
+ * attached directly to <body> (outside #root), so hiding #root while the
+ * preview is open makes File → Print produce only the A4 pack pages.
+ * Pack page styling itself lives in packCss.ts (shared with the standalone
+ * saved HTML) — this file only wires the app chrome around it.
+ */
+
+.pack-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow: auto;
+  background: rgba(13, 10, 38, 0.55);
+  padding: 24px 16px 48px;
+}
+
+.pack-overlay-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 61;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  max-width: 210mm;
+  margin: 0 auto 16px;
+  background: #211951;
+  color: #fbfaf7;
+  border-radius: 12px;
+  padding: 10px 16px;
+  box-shadow: 0 8px 30px rgba(13, 10, 38, 0.3);
+}
+
+/* Hidden serialisation container — the pack document stays mounted so
+   "Save to pack library" can read its outerHTML without opening the preview */
+.pack-hidden-doc {
+  display: none;
+}
+
+@media print {
+  body.pack-print-mode #root {
+    display: none !important;
+  }
+  .pack-overlay {
+    position: static !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+  }
+}
