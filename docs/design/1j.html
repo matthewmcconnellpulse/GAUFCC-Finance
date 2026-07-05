@@ -1,0 +1,136 @@
+<div class="dv-opt" id="1j">
+<div class="dv-olabel"><a class="dv-oid" href="#1j">1j</a>Imports — HSBC statement drop-in with sense checks; Epworth mapping remembers itself month to month</div>
+<div class="dv-card" style="width:1360px">
+<div style="display:grid;grid-template-columns:216px 1fr;min-height:780px">
+  <div style="background:#211951;color:#fbfaf7;padding:20px 14px;display:flex;flex-direction:column;gap:2px">
+    <div style="display:flex;align-items:center;gap:10px;padding:4px 8px 18px"><img src="assets/logo-inverted.svg" alt="Pulse" style="height:18px"><div style="width:1px;height:16px;background:rgba(255,255,255,.2)"></div><span style="font:500 12px 'Geist',sans-serif;color:rgba(251,250,247,.85)">GAUFCC Finance</span></div>
+    <div style="font:500 9px 'Geist',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.38);padding:10px 10px 6px">Overview</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Dashboard</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Funds</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Reports</div>
+    <div style="font:500 9px 'Geist',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.38);padding:14px 10px 6px">Operations</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Expenses</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">People</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;background:rgba(8,242,199,.13);color:#08f2c7">Imports</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">VAT</div>
+    <div style="font:500 9px 'Geist',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.38);padding:14px 10px 6px">Admin</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Projects</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Settings</div>
+    <div style="margin-top:auto;padding:10px;border-radius:9px;background:rgba(255,255,255,.06);display:flex;align-items:center;gap:9px">
+      <div style="width:28px;height:28px;border-radius:50%;background:#08f2c7;color:#211951;display:grid;place-items:center;font:600 11px 'Geist',sans-serif">JW</div>
+      <div><div style="font:500 11.5px 'Geist',sans-serif;color:#fbfaf7">J. Whittaker</div><div style="font:400 10px 'Geist',sans-serif;color:rgba(251,250,247,.5)">Pulse · Bookkeeper</div></div>
+    </div>
+  </div>
+  <div style="background:#fbfaf7;display:flex;flex-direction:column">
+    <div style="height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid #ebe9e3;background:#fff">
+      <div style="font:400 12.5px 'Geist',sans-serif;color:#807c70">Imports <span style="color:#d6d3c9">/</span> <span style="color:#0d0a26">June 2026</span></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="display:flex;align-items:center;gap:8px;font:500 11.5px 'Geist',sans-serif;color:#211951"><span style="width:7px;height:7px;border-radius:50%;background:#08f2c7"></span>Synced today 04:00</div>
+        <div style="width:30px;height:30px;border-radius:50%;background:#08f2c7;color:#211951;display:grid;place-items:center;font:600 11px 'Geist',sans-serif">JW</div>
+      </div>
+    </div>
+    <div style="padding:24px 28px 30px;flex:1">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font:400 28px 'Fraunces',serif;color:#0d0a26">Imports</div>
+        <div style="display:flex;background:#fff;border:1px solid #d6d3c9;border-radius:999px;padding:3px">
+          <button onClick="{{ setHsbc }}" style="background:{{ thBg }};color:{{ thFg }};border:0;border-radius:999px;padding:7px 16px;font:500 12px 'Geist',sans-serif;cursor:pointer">HSBC statements</button>
+          <button onClick="{{ setEpworth }}" style="background:{{ teBg }};color:{{ teFg }};border:0;border-radius:999px;padding:7px 16px;font:500 12px 'Geist',sans-serif;cursor:pointer">Epworth investments</button>
+        </div>
+      </div>
+
+      <sc-if value="{{ tabHsbc }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:380px 1fr;gap:16px;margin-top:20px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="border:2px dashed #b3afa3;border-radius:14px;background:#fff;padding:22px;text-align:center">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#211951" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto;display:block"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+              <div style="font:500 13.5px 'Geist',sans-serif;color:#0d0a26;margin-top:10px">Drop the HSBC statement</div>
+              <div style="font:400 11.5px/1.55 'Geist',sans-serif;color:#807c70;margin-top:4px">PDF or CSV export. No feed exists on this account — this drop-in replaces it.</div>
+            </div>
+            <div style="background:#fff;border:1px solid #ebe9e3;border-radius:12px;padding:14px 16px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="width:34px;height:34px;border-radius:8px;background:rgba(33,25,81,.07);display:grid;place-items:center;font:600 9px 'JetBrains Mono',monospace;color:#211951">PDF</div>
+                <div><div style="font:500 12.5px 'Geist',sans-serif;color:#0d0a26">HSBC_40-21_Jun2026.pdf</div><div style="font:400 10.5px 'JetBrains Mono',monospace;color:#807c70;margin-top:2px">96 rows parsed · 01–30 Jun · Claude fallback used, p.3</div></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+                <div style="background:#fbfaf7;border-radius:8px;padding:8px 11px"><div style="font:500 8.5px 'Geist',sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#807c70">Opening 01 Jun</div><div style="font:500 12.5px 'JetBrains Mono',monospace;margin-top:3px;color:#0d0a26">£214,882.10</div></div>
+                <div style="background:#fbfaf7;border-radius:8px;padding:8px 11px"><div style="font:500 8.5px 'Geist',sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#807c70">Closing 30 Jun</div><div style="font:500 12.5px 'JetBrains Mono',monospace;margin-top:3px;color:#0d0a26">£202,417.55</div></div>
+              </div>
+            </div>
+          </div>
+          <div style="background:#fff;border:1px solid #ebe9e3;border-radius:12px;overflow:hidden">
+            <div style="padding:14px 20px;border-bottom:1px solid #ebe9e3;font:400 16px 'Fraunces',serif;color:#0d0a26">Sense checks — 3 of 4 clear</div>
+            <div style="display:grid;grid-template-columns:26px 1fr auto;gap:0 12px;padding:12px 20px;border-bottom:1px solid #f3f1ea;align-items:center">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#04b894" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+              <div style="font:400 12.5px 'Geist',sans-serif;color:#0d0a26">Opening balance matches May's closing <span style="color:#807c70;font-family:'JetBrains Mono',monospace;font-size:11px">£214,882.10</span></div>
+              <span style="font:500 10px 'Geist',sans-serif;padding:3px 10px;border-radius:999px;background:rgba(4,184,148,.13);color:#036c57">Pass</span>
+            </div>
+            <div style="display:grid;grid-template-columns:26px 1fr auto;gap:0 12px;padding:12px 20px;border-bottom:1px solid #f3f1ea;align-items:center">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#04b894" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+              <div style="font:400 12.5px 'Geist',sans-serif;color:#0d0a26">Running balance recomputes line by line, 96 / 96</div>
+              <span style="font:500 10px 'Geist',sans-serif;padding:3px 10px;border-radius:999px;background:rgba(4,184,148,.13);color:#036c57">Pass</span>
+            </div>
+            <div style="display:grid;grid-template-columns:26px 1fr auto;gap:0 12px;padding:12px 20px;border-bottom:1px solid #f3f1ea;align-items:center;background:rgba(245,165,36,.05)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#b86e02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+              <div style="font:400 12.5px 'Geist',sans-serif;color:#0d0a26">No date gaps vs previous imports — <b style="color:#8a5200">27–28 Jun missing (weekend, zero-activity likely)</b></div>
+              <span style="font:500 10px 'Geist',sans-serif;padding:3px 10px;border-radius:999px;background:rgba(245,165,36,.15);color:#8a5200">Review</span>
+            </div>
+            <div style="display:grid;grid-template-columns:26px 1fr auto;gap:0 12px;padding:12px 20px;align-items:center">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#04b894" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+              <div style="font:400 12.5px 'Geist',sans-serif;color:#0d0a26">Duplicates vs already-imported rows — none of 96</div>
+              <span style="font:500 10px 'Geist',sans-serif;padding:3px 10px;border-radius:999px;background:rgba(4,184,148,.13);color:#036c57">Pass</span>
+            </div>
+            <div style="padding:14px 20px;background:#fbfaf7;border-top:1px solid #ebe9e3;display:flex;align-items:center;gap:12px">
+              <button style="background:#d6d3c9;color:#807c70;border:0;border-radius:999px;padding:10px 18px;font:500 12.5px 'Geist',sans-serif;cursor:not-allowed">Generate Xero CSV</button>
+              <span style="font:400 11.5px 'Geist',sans-serif;color:#807c70">blocked until the gap is resolved — or <a href="#1j" style="color:#211951">override with a reason</a> (logged to the audit trail)</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ tabEpworth }}" hint-placeholder-val="{{ false }}">
+        <div style="margin-top:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="font:400 13px 'Geist',sans-serif;color:#4a4740">EPW_Valuation_Jun2026.pdf · parsed 5 holdings · <b style="color:#0d0a26">1 unmapped line needs you</b> — mappings are remembered next month</div>
+            <button style="background:#211951;color:#fbfaf7;border:0;border-radius:999px;padding:8px 16px;font:500 12px 'Geist',sans-serif;cursor:pointer">Export posting summary CSV</button>
+          </div>
+          <div style="background:#fff;border:1px solid #ebe9e3;border-radius:12px;overflow:hidden;margin-top:12px">
+            <div style="display:grid;grid-template-columns:1.5fr 1.3fr 105px 105px 105px 110px;gap:0 12px;padding:10px 20px;background:#f6f4ee;font:500 9px 'Geist',sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#807c70">
+              <div>Epworth holding</div><div>Maps to fund</div><div style="text-align:right">Dividends</div><div style="text-align:right">Interest</div><div style="text-align:right">Realised</div><div style="text-align:right">Unrealised</div>
+            </div>
+            <sc-for list="{{ epworthRows }}" as="e" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:1.5fr 1.3fr 105px 105px 105px 110px;gap:0 12px;padding:11px 20px;border-bottom:1px solid #f3f1ea;align-items:center">
+                <div style="font:400 12px 'JetBrains Mono',monospace;color:#0d0a26">{{ e.ref }}</div>
+                <div>
+                  <sc-if value="{{ e.mapped }}" hint-placeholder-val="{{ true }}">
+                    <span style="font:500 11px 'Geist',sans-serif;padding:3px 10px;border-radius:999px;background:rgba(33,25,81,.07);color:#211951">{{ e.fund }}</span>
+                  </sc-if>
+                  <sc-if value="{{ e.unmapped }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:inline-flex;align-items:center;gap:6px;font:500 11px 'Geist',sans-serif;padding:4px 11px;border-radius:999px;background:rgba(245,165,36,.15);color:#8a5200;border:1px dashed #f5a524;cursor:pointer">Map to a fund… <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+                  </sc-if>
+                </div>
+                <div style="text-align:right;font:400 11px 'JetBrains Mono',monospace;color:#0d0a26">{{ e.div }}</div>
+                <div style="text-align:right;font:400 11px 'JetBrains Mono',monospace;color:#0d0a26">{{ e.int }}</div>
+                <div style="text-align:right;font:400 11px 'JetBrains Mono',monospace;color:#0d0a26">{{ e.rg }}</div>
+                <div style="text-align:right;font:400 11px 'JetBrains Mono',monospace;color:#0d0a26">{{ e.ug }}</div>
+              </div>
+            </sc-for>
+            <div style="display:grid;grid-template-columns:1.5fr 1.3fr 105px 105px 105px 110px;gap:0 12px;padding:12px 20px;background:#211951;font:500 11px 'JetBrains Mono',monospace;color:#fbfaf7;align-items:center">
+              <div style="font-family:'Geist',sans-serif;font-size:12px">June totals</div><div style="font-family:'Geist',sans-serif;font-size:10.5px;color:rgba(251,250,247,.55)">→ fund reporting + CSV</div>
+              <div style="text-align:right">15,599.07</div><div style="text-align:right">14,014.00</div><div style="text-align:right">4,180.00</div><div style="text-align:right;color:#08f2c7">22,360.00</div>
+            </div>
+          </div>
+          <div style="font:400 11px 'Geist',sans-serif;color:#807c70;margin-top:10px">Postings are generated as a manual-journal-style CSV for the bookkeeper — nothing is pushed to Xero by the platform.</div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div class="dv-group"><b>Design system sheet</b> <span class="dv-gdesc">tokens + components Claude Code can implement directly — extends the Pulse system with the trustee-facing type pairing</span></div>
+<div class="dv-opts">
+
+<!-- ============ 1k TOKENS ============ -->

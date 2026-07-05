@@ -1,0 +1,116 @@
+<div class="dv-opt" id="1d">
+<div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Table-led — one dense register, filter chips, click a row for the fund panel</div>
+<div class="dv-card" style="width:1440px">
+<div style="display:grid;grid-template-columns:216px 1fr;min-height:880px">
+  <!-- sidebar -->
+  <div style="background:#211951;color:#fbfaf7;padding:20px 14px;display:flex;flex-direction:column;gap:2px">
+    <div style="display:flex;align-items:center;gap:10px;padding:4px 8px 18px"><img src="assets/logo-inverted.svg" alt="Pulse" style="height:18px"><div style="width:1px;height:16px;background:rgba(255,255,255,.2)"></div><span style="font:500 12px 'Geist',sans-serif;color:rgba(251,250,247,.85)">GAUFCC Finance</span></div>
+    <div style="font:500 9px 'Geist',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.38);padding:10px 10px 6px">Overview</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Dashboard</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;background:rgba(8,242,199,.13);color:#08f2c7">Funds</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Reports</div>
+    <div style="font:500 9px 'Geist',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.38);padding:14px 10px 6px">Operations</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72);display:flex;justify-content:space-between;align-items:center">Expenses <span style="font:500 9.5px 'JetBrains Mono',monospace;background:#08f2c7;color:#211951;padding:1px 6px;border-radius:999px">{{ queueCountLabel }}</span></div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">People</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Imports</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">VAT</div>
+    <div style="font:500 9px 'Geist',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.38);padding:14px 10px 6px">Admin</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Projects</div>
+    <div style="padding:8px 10px;border-radius:7px;font:500 12.5px 'Geist',sans-serif;color:rgba(251,250,247,.72)">Settings</div>
+    <div style="margin-top:auto;padding:10px;border-radius:9px;background:rgba(255,255,255,.06);display:flex;align-items:center;gap:9px">
+      <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#1de4ff,#ff80e3);color:#211951;display:grid;place-items:center;font:600 11px 'Geist',sans-serif">LS</div>
+      <div><div style="font:500 11.5px 'Geist',sans-serif;color:#fbfaf7">Liz Slade</div><div style="font:400 10px 'Geist',sans-serif;color:rgba(251,250,247,.5)">Chief Executive</div></div>
+    </div>
+  </div>
+  <!-- main -->
+  <div style="background:#fbfaf7;display:flex;flex-direction:column">
+    <div style="height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid #ebe9e3;background:#fff">
+      <div style="font:400 12.5px 'Geist',sans-serif;color:#807c70">Funds <span style="color:#d6d3c9">/</span> <span style="color:#0d0a26">Overview</span></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button onClick="{{ doSync }}" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #d6d3c9;border-radius:999px;padding:7px 14px;font:500 11.5px 'Geist',sans-serif;color:#211951;cursor:pointer" style-hover="border-color:#211951">
+          <span style="width:7px;height:7px;border-radius:50%;background:{{ syncDot }};animation:syncPulse 1.4s infinite"></span>
+          <span>{{ syncLabel }}</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+        <div style="width:30px;height:30px;border-radius:50%;background:#211951;color:#08f2c7;display:grid;place-items:center;font:600 11px 'Geist',sans-serif">LS</div>
+      </div>
+    </div>
+    <div style="padding:26px 28px 30px;display:flex;flex-direction:column;flex:1">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end">
+        <div><div style="font:400 30px 'Fraunces',serif;color:#0d0a26">Funds</div><div style="font:400 12.5px 'Geist',sans-serif;color:#807c70;margin-top:3px">The Assembly's 60 funds, live from Xero tracking categories</div></div>
+        <div style="display:flex;gap:8px"><button style="background:transparent;border:1px solid #d6d3c9;border-radius:999px;padding:8px 15px;font:500 12px 'Geist',sans-serif;color:#211951;cursor:pointer">Export register</button><button style="background:#211951;border:0;border-radius:999px;padding:8px 15px;font:500 12px 'Geist',sans-serif;color:#fbfaf7;cursor:pointer">Build board pack</button></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px">
+        <div style="background:#211951;border-radius:12px;padding:16px 18px"><div style="font:500 9.5px 'Geist',sans-serif;letter-spacing:.13em;text-transform:uppercase;color:#08f2c7">Total funds</div><div style="font:400 27px 'Fraunces',serif;color:#fbfaf7;margin-top:6px">£8,042,100</div><div style="font:400 10.5px 'JetBrains Mono',monospace;color:rgba(251,250,247,.55);margin-top:3px">+£223,700 this year</div></div>
+        <div style="background:#fff;border:1px solid #ebe9e3;border-radius:12px;padding:16px 18px"><div style="font:500 9.5px 'Geist',sans-serif;letter-spacing:.13em;text-transform:uppercase;color:#807c70">Restricted</div><div style="font:400 27px 'Fraunces',serif;color:#0d0a26;margin-top:6px">£3,214,900</div><div style="font:400 10.5px 'JetBrains Mono',monospace;color:#807c70;margin-top:3px">29 funds</div></div>
+        <div style="background:#fff;border:1px solid #ebe9e3;border-radius:12px;padding:16px 18px"><div style="font:500 9.5px 'Geist',sans-serif;letter-spacing:.13em;text-transform:uppercase;color:#807c70">Unrestricted</div><div style="font:400 27px 'Fraunces',serif;color:#0d0a26;margin-top:6px">£4,827,200</div><div style="font:400 10.5px 'JetBrains Mono',monospace;color:#807c70;margin-top:3px">designated + general · 31 funds</div></div>
+        <div style="background:#fff;border:1px solid #f5a524;border-radius:12px;padding:16px 18px"><div style="font:500 9.5px 'Geist',sans-serif;letter-spacing:.13em;text-transform:uppercase;color:#8a5200">Flagged</div><div style="font:400 27px 'Fraunces',serif;color:#0d0a26;margin-top:6px">4 funds</div><div style="font:400 10.5px 'Geist',sans-serif;color:#8a5200;margin-top:3px">2 need a trustee decision</div></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px">
+        <div style="display:flex;gap:6px">
+          <sc-for list="{{ filters }}" as="fl" hint-placeholder-count="6">
+            <button onClick="{{ fl.set }}" style="background:{{ fl.bg }};color:{{ fl.fg }};border:1px solid {{ fl.bd }};border-radius:999px;padding:6px 13px;font:500 11.5px 'Geist',sans-serif;cursor:pointer;transition:all 140ms">{{ fl.label }}</button>
+          </sc-for>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #ebe9e3;border-radius:999px;padding:7px 13px;color:#807c70;width:200px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          <span style="font:400 11.5px 'Geist',sans-serif">Search funds</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;margin-top:12px;flex:1;align-items:stretch">
+        <div style="flex:1;background:#fff;border:1px solid #ebe9e3;border-radius:12px;overflow:hidden;align-self:flex-start">
+          <div style="display:grid;grid-template-columns:minmax(240px,1.5fr) 108px 130px 110px 110px 96px;gap:0 14px;padding:10px 18px;background:#f6f4ee;border-bottom:1px solid #ebe9e3;font:500 9px 'Geist',sans-serif;letter-spacing:.13em;text-transform:uppercase;color:#807c70">
+            <div>Fund</div><div>Type</div><div style="text-align:right">Balance</div><div style="text-align:right">YTD income</div><div style="text-align:right">YTD spend</div><div style="text-align:right">9-mo trend</div>
+          </div>
+          <sc-for list="{{ funds }}" as="f" hint-placeholder-count="12">
+            <div onClick="{{ f.open }}" style="display:grid;grid-template-columns:minmax(240px,1.5fr) 108px 130px 110px 110px 96px;gap:0 14px;padding:10px 18px;border-bottom:1px solid #f3f1ea;align-items:center;cursor:pointer;background:{{ f.rowBg }};transition:background 140ms" style-hover="background:#f6f4ee">
+              <div>
+                <div style="font:500 13px 'Geist',sans-serif;color:#0d0a26">{{ f.name }}</div>
+                <sc-if value="{{ f.warn }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:inline-flex;align-items:center;gap:5px;margin-top:3px;background:rgba(245,165,36,.14);border-radius:999px;padding:2px 8px">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#b86e02" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+                    <span style="font:500 10px 'Geist',sans-serif;color:#8a5200">{{ f.warn }}</span>
+                  </div>
+                </sc-if>
+              </div>
+              <div><span style="font:500 10px 'Geist',sans-serif;padding:3px 9px;border-radius:999px;background:{{ f.chipBg }};color:{{ f.chipFg }}">{{ f.typeLabel }}</span></div>
+              <div style="text-align:right;font:500 13px 'JetBrains Mono',monospace;color:#0d0a26">£{{ f.bal }}</div>
+              <div style="text-align:right;font:400 12px 'JetBrains Mono',monospace;color:#036c57">{{ f.inc }}</div>
+              <div style="text-align:right;font:400 12px 'JetBrains Mono',monospace;color:#4a4740">{{ f.exp }}</div>
+              <div style="display:flex;justify-content:flex-end"><svg width="72" height="20" viewBox="0 0 60 18" preserveAspectRatio="none"><polyline points="{{ f.spark }}" fill="none" stroke="{{ f.sparkColor }}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg></div>
+            </div>
+          </sc-for>
+          <div style="padding:11px 18px;display:flex;justify-content:space-between;font:400 11px 'Geist',sans-serif;color:#807c70"><span>{{ fundCountLabel }}</span><span>Smaller funds are grouped in reports · view all 60 →</span></div>
+        </div>
+        <sc-if value="{{ hasDetail }}" hint-placeholder-val="{{ false }}">
+          <div style="width:340px;background:#fff;border:1px solid #d6d3c9;border-radius:12px;padding:20px;box-shadow:0 24px 48px -16px rgba(13,10,38,.18);align-self:flex-start;position:sticky;top:16px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <span style="font:500 10px 'Geist',sans-serif;padding:3px 10px;border-radius:999px;background:{{ detail.chipBg }};color:{{ detail.chipFg }}">{{ detail.typeLabel }}</span>
+              <button onClick="{{ closeDetail }}" style="background:transparent;border:0;cursor:pointer;color:#807c70;padding:2px" aria-label="Close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div style="font:400 21px/1.15 'Fraunces',serif;color:#0d0a26;margin-top:10px">{{ detail.name }}</div>
+            <div style="font:300 34px 'Fraunces',serif;color:#211951;margin-top:12px">£{{ detail.bal }}</div>
+            <div style="font:400 10.5px 'Geist',sans-serif;color:#807c70;margin-top:2px">balance at last sync</div>
+            <svg width="298" height="70" viewBox="0 0 60 18" preserveAspectRatio="none" style="margin-top:14px;display:block"><polyline points="{{ detail.spark }}" fill="none" stroke="{{ detail.sparkColor }}" stroke-width="1.4" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
+              <div style="background:#fbfaf7;border:1px solid #ebe9e3;border-radius:9px;padding:10px 12px"><div style="font:500 9px 'Geist',sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#807c70">YTD income</div><div style="font:500 13px 'JetBrains Mono',monospace;color:#036c57;margin-top:4px">£{{ detail.inc }}</div></div>
+              <div style="background:#fbfaf7;border:1px solid #ebe9e3;border-radius:9px;padding:10px 12px"><div style="font:500 9px 'Geist',sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#807c70">YTD spend</div><div style="font:500 13px 'JetBrains Mono',monospace;color:#0d0a26;margin-top:4px">£{{ detail.exp }}</div></div>
+            </div>
+            <sc-if value="{{ detail.warn }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:12px;background:rgba(245,165,36,.1);border:1px solid rgba(245,165,36,.4);border-radius:9px;padding:10px 12px;font:400 11.5px/1.5 'Geist',sans-serif;color:#8a5200"><b>Flag</b> — {{ detail.warn }}. Included in the next board pack automatically.</div>
+            </sc-if>
+            <div style="font:400 12px/1.6 'Geist',sans-serif;color:#4a4740;margin-top:14px">{{ detail.purpose }}</div>
+            <div style="font:400 11px 'Geist',sans-serif;color:#807c70;margin-top:10px">Fund contact — {{ detail.mgr }}</div>
+            <button style="margin-top:16px;width:100%;background:#211951;color:#fbfaf7;border:0;border-radius:999px;padding:9px 0;font:500 12px 'Geist',sans-serif;cursor:pointer">Open full fund page</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============ 1e CARD-LED DASHBOARD ============ -->

@@ -1,0 +1,265 @@
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: &quot;100%&quot;, &quot;height&quot;: 900 },
+  &quot;approvalDay&quot;: { &quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 10, &quot;min&quot;: 1, &quot;max&quot;: 28, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Expense deadlines (Settings-driven)&quot; },
+  &quot;paymentDay&quot;: { &quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 17, &quot;min&quot;: 1, &quot;max&quot;: 28, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Expense deadlines (Settings-driven)&quot; },
+  &quot;showDormantFunds&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Fund dashboard&quot; }
+}">
+class Component extends DCLogic {
+  state = {
+    dashFilter: 'all', detailId: null, syncState: 0,
+    pIdx: 0, decisions: {}, dSel: { c2: true, c3: true }, dFocus: 0,
+    step: 2, impTab: 'hsbc', ioOpen: 0, recConfirmed: false
+  };
+
+  fundsData = [
+    { id:'g1', name:'General Fund', type:'General', bal:'2,930,900', inc:'850,450', exp:'597,780', warn:null, dormant:false,
+      spark:'0,14 10,13 20,11 30,12 40,9 50,7 60,4', up:true, mgr:'Liz Slade (CEO)',
+      purpose:'Unrestricted funds for the general purposes of the Assembly — governance, staff, Essex Hall operations and member support.' },
+    { id:'r1', name:'Sustentation Fund', type:'Restricted', bal:'1,284,600', inc:'96,400', exp:'53,000', warn:null, dormant:false,
+      spark:'0,15 10,12 20,13 30,10 40,8 50,8 60,5', up:true, mgr:'Rev. C. Barbour',
+      purpose:'Support for stipendiary ministry in congregations unable to fully fund a minister.' },
+    { id:'d1', name:'Essex Hall Redevelopment Fund', type:'Designated', bal:'1,028,600', inc:'4,800', exp:'96,200', warn:null, dormant:false,
+      spark:'0,5 10,6 20,7 30,8 40,9 50,11 60,13', up:false, mgr:'Buildings committee',
+      purpose:'Set aside by the trustees for phased refurbishment of Essex Hall, the Assembly headquarters.' },
+    { id:'r2', name:'Ministry Students Fund', type:'Restricted', bal:'635,350', inc:'84,200', exp:'61,150', warn:null, dormant:false,
+      spark:'0,12 10,10 20,14 30,11 40,8 50,6 60,4', up:true, mgr:'Rev. Dr. E. Fielden',
+      purpose:'Grants and bursaries for candidates training for Unitarian ministry.' },
+    { id:'r3', name:'Chapel Buildings & Fabric Fund', type:'Restricted', bal:'450,800', inc:'52,300', exp:'88,400', warn:'Spend ↑ 41% vs 12-mo avg', dormant:false,
+      spark:'0,4 10,5 20,6 30,6 40,9 50,12 60,15', up:false, mgr:'Buildings committee',
+      purpose:'Repair and maintenance of chapel buildings of member congregations.' },
+    { id:'d2', name:'Congregational Growth Fund', type:'Designated', bal:'372,800', inc:'12,000', exp:'41,200', warn:null, dormant:false,
+      spark:'0,6 10,7 20,8 30,8 40,10 50,11 60,12', up:false, mgr:'Growth panel',
+      purpose:'Seed funding for new and growing congregations and lay leadership.' },
+    { id:'r4', name:"Ministers' Welfare Fund", type:'Restricted', bal:'296,750', inc:'18,600', exp:'24,300', warn:null, dormant:false,
+      spark:'0,9 10,10 20,9 30,11 40,10 50,11 60,11', up:false, mgr:'Welfare panel',
+      purpose:'Hardship and retirement support for ministers and their dependants.' },
+    { id:'d3', name:'Lindsey Press Fund', type:'Designated', bal:'226,200', inc:'38,900', exp:'27,300', warn:null, dormant:false,
+      spark:'0,12 10,11 20,12 30,10 40,9 50,8 60,6', up:true, mgr:'Publications panel',
+      purpose:'Publishing programme of the Assembly — titles, reprints and distribution.' },
+    { id:'r5', name:'Youth & Young Adults Fund', type:'Restricted', bal:'138,800', inc:'22,500', exp:'31,900', warn:'YTD deficit −£9,400', dormant:false,
+      spark:'0,6 10,7 20,9 30,8 40,11 50,12 60,14', up:false, mgr:'Youth panel',
+      purpose:'Youth programmes, young adult events and safeguarding training.' },
+    { id:'d4', name:'Worship & Congregational Life Fund', type:'Designated', bal:'84,500', inc:'9,200', exp:'12,600', warn:null, dormant:false,
+      spark:'0,9 10,9 20,10 30,9 40,10 50,10 60,11', up:false, mgr:'Worship panel',
+      purpose:'Worship resources, hymnody and congregational life grants.' },
+    { id:'r6', name:'Aubrey Bequest', type:'Restricted', bal:'41,300', inc:'0', exp:'0', warn:'No movement in 38 months', dormant:true,
+      spark:'0,9 10,9 20,9 30,9 40,9 50,9 60,9', up:false, mgr:'—',
+      purpose:'Bequest for the upkeep of the Aubrey memorial library. Trustees to consider re-purposing under Charities Act powers.' },
+    { id:'d5', name:'District Support Fund', type:'Designated', bal:'21,300', inc:'2,100', exp:'8,400', warn:'Below £25,000 minimum', dormant:false,
+      spark:'0,5 10,7 20,8 30,10 40,12 50,13 60,15', up:false, mgr:'District liaison',
+      purpose:'Top-up support for district associations with limited reserves.' }
+  ];
+
+  chipStyles = {
+    Restricted: { bg:'rgba(33,25,81,.09)', fg:'#211951' },
+    Designated: { bg:'rgba(22,182,206,.13)', fg:'#0e7c8c' },
+    General:    { bg:'rgba(4,184,148,.13)', fg:'#036c57' },
+    Dormant:    { bg:'#ebe9e3', fg:'#807c70' }
+  };
+
+  claimsData = [
+    { id:'c1', who:'Rev. Ann Howell', initials:'AH', avBg:'#211951', role:'Ministry team', period:'June 2026', total:'£184.20', nLines:'3 lines · 3 receipts',
+      lines:[
+        { d:'18 Jun', desc:'Rail — London to Sheffield, Great Hucklow retreat', cat:'Travel', fund:'General Fund', amt:'£96.50' },
+        { d:'19 Jun', desc:'B&B — Nightingale Centre', cat:'Subsistence', fund:'General Fund', amt:'£72.00' },
+        { d:'19 Jun', desc:'Taxi — station transfer', cat:'Travel', fund:'General Fund', amt:'£15.70' }
+      ], note:null, aiOk:true },
+    { id:'c2', who:'Marcus Okafor', initials:'MO', avBg:'#16b6ce', role:'Events coordinator', period:'June 2026', total:'£420.00', nLines:'1 line · 1 receipt',
+      lines:[ { d:'24 Jun', desc:'Venue deposit — GA 2026 fringe, Birmingham', cat:'Venue hire', fund:'Congregational Growth Fund', amt:'£420.00' } ],
+      note:'AI read VAT at 61% confidence — Pulse will verify before push', aiOk:false },
+    { id:'c3', who:'Sofia Patel', initials:'SP', avBg:'#04b894', role:'Volunteer — youth panel', period:'June 2026', total:'£56.31', nLines:'2 lines · 2 receipts',
+      lines:[
+        { d:'21 Jun', desc:'Printing — youth consultation packs', cat:'Printing', fund:'Youth & Young Adults Fund', amt:'£38.31' },
+        { d:'21 Jun', desc:'Refreshments — consultation session', cat:'Catering', fund:'Youth & Young Adults Fund', amt:'£18.00' }
+      ], note:null, aiOk:true },
+    { id:'c4', who:'D. Mensah Surveys Ltd', initials:'DM', avBg:'#4a4740', role:'Supplier', period:'June 2026', total:'£1,140.00', nLines:'1 line · 1 receipt',
+      lines:[ { d:'30 Jun', desc:'Chapel roof survey — Ullet Road, Liverpool', cat:'Repairs & maintenance', fund:'Chapel Buildings & Fabric Fund', amt:'£1,140.00' } ],
+      note:null, aiOk:true }
+  ];
+
+  receiptsData = [
+    { file:'IMG_2214.jpg', merchant:'Northern Rail', date:'18 Jun 2026', total:'£96.50', vat:'£0.00', cat:'Travel', conf:'98', ok:true },
+    { file:'IMG_2215.jpg', merchant:'Nightingale Centre', date:'19 Jun 2026', total:'£72.00', vat:'£12.00', cat:'Subsistence', conf:'97', ok:true },
+    { file:'IMG_2216.jpg', merchant:'City Taxis Sheffield', date:'19 Jun 2026', total:'£15.70', vat:'£2.62', cat:'Travel', conf:'61', ok:false }
+  ];
+
+  sofa = {
+    r: [
+      { n:'Sustentation Fund', o:'1,241,200', i:'96,400', e:'53,000', c:'1,284,600' },
+      { n:'Ministry Students Fund', o:'612,300', i:'84,200', e:'61,150', c:'635,350' },
+      { n:'Chapel Buildings & Fabric Fund', o:'486,900', i:'52,300', e:'88,400', c:'450,800' },
+      { n:"Ministers' Welfare Fund", o:'302,450', i:'18,600', e:'24,300', c:'296,750' },
+      { n:'Youth & Young Adults Fund', o:'148,200', i:'22,500', e:'31,900', c:'138,800' },
+      { n:'Aubrey Bequest (dormant)', o:'41,300', i:'0', e:'0', c:'41,300' },
+      { n:'23 further restricted funds', o:'361,000', i:'21,300', e:'15,000', c:'367,300' }
+    ],
+    d: [
+      { n:'Essex Hall Redevelopment Fund', o:'1,120,000', i:'4,800', e:'96,200', c:'1,028,600' },
+      { n:'Congregational Growth Fund', o:'402,000', i:'12,000', e:'41,200', c:'372,800' },
+      { n:'Lindsey Press Fund', o:'214,600', i:'38,900', e:'27,300', c:'226,200' },
+      { n:'11 further designated funds', o:'262,400', i:'11,300', e:'5,000', c:'268,700' }
+    ]
+  };
+
+  epworthRows = [
+    { ref:'EPW-4471 · Affirmative Equity', fund:'Sustentation Fund', mapped:true, div:'6,420.00', int:'—', rg:'4,180.00', ug:'11,240.00' },
+    { ref:'EPW-4472 · Affirmative Equity', fund:'Ministry Students Fund', mapped:true, div:'7,266.67', int:'—', rg:'—', ug:'8,914.00' },
+    { ref:'EPW-4473 · Affirmative Fixed Int.', fund:'General Fund', mapped:true, div:'—', int:'9,214.00', rg:'—', ug:'—' },
+    { ref:'EPW-4488 · Cash deposit fund', fund:'Essex Hall Redevelopment Fund', mapped:true, div:'—', int:'4,800.00', rg:'—', ug:'—' },
+    { ref:'EPW-4507 · Affirmative Equity', fund:null, mapped:false, div:'1,912.40', int:'—', rg:'—', ug:'2,206.00' }
+  ];
+
+  componentDidMount() { this._t = null; }
+  componentWillUnmount() { if (this._t) clearTimeout(this._t); }
+
+  doSync = () => {
+    if (this.state.syncState === 1) return;
+    this.setState({ syncState: 1 });
+    this._t = setTimeout(() => this.setState({ syncState: 2 }), 1600);
+  };
+
+  renderVals() {
+    const s = this.state;
+    const ad = this.props.approvalDay ?? 10;
+    const pd = this.props.paymentDay ?? 17;
+    const showDormant = this.props.showDormantFunds ?? true;
+
+    // ----- fund lists -----
+    const filters = [
+      { key:'all', label:'All funds' }, { key:'flagged', label:'Flagged' },
+      { key:'Restricted', label:'Restricted' }, { key:'Designated', label:'Designated' },
+      { key:'General', label:'General' }, { key:'dormant', label:'Dormant' }
+    ].map(f => ({
+      ...f, on: s.dashFilter === f.key,
+      bg: s.dashFilter === f.key ? '#211951' : 'transparent',
+      fg: s.dashFilter === f.key ? '#fbfaf7' : '#4a4740',
+      bd: s.dashFilter === f.key ? '#211951' : '#d6d3c9',
+      set: () => this.setState({ dashFilter: f.key })
+    }));
+
+    const match = f =>
+      (showDormant || !f.dormant) &&
+      (s.dashFilter === 'all' ? true :
+       s.dashFilter === 'flagged' ? !!f.warn :
+       s.dashFilter === 'dormant' ? f.dormant : f.type === s.dashFilter);
+
+    const decorate = f => {
+      const chip = this.chipStyles[f.dormant ? 'Dormant' : f.type];
+      return {
+        ...f,
+        typeLabel: f.type, isDormant: f.dormant,
+        chipBg: chip.bg, chipFg: chip.fg,
+        sparkColor: f.warn ? '#f5a524' : (f.up ? '#04b894' : '#b3afa3'),
+        balColor: f.warn ? '#0d0a26' : '#0d0a26',
+        open: () => this.setState({ detailId: f.id }),
+        isOpen: s.detailId === f.id,
+        rowBg: s.detailId === f.id ? '#f3f1ea' : 'transparent'
+      };
+    };
+
+    const funds = this.fundsData.filter(match).map(decorate);
+    const cardsR = this.fundsData.filter(f => f.type === 'Restricted' && match(f)).map(decorate);
+    const cardsD = this.fundsData.filter(f => f.type === 'Designated' && match(f)).map(decorate);
+    const cardsG = this.fundsData.filter(f => f.type === 'General' && match(f)).map(decorate);
+
+    const detailF = this.fundsData.find(f => f.id === s.detailId);
+    const detail = detailF ? decorate(detailF) : null;
+
+    // ----- approvals -----
+    const undecided = this.claimsData.filter(c => !s.decisions[c.id]);
+    const pClaim = undecided[Math.min(s.pIdx, Math.max(undecided.length - 1, 0))] || null;
+    const done = Object.keys(s.decisions).length;
+    const approvedN = Object.values(s.decisions).filter(v => v === 'a').length;
+    const rejectedN = done - approvedN;
+
+    const claims = this.claimsData.map((c, i) => {
+      const dec = s.decisions[c.id];
+      return {
+        ...c,
+        statusLabel: dec === 'a' ? 'Approved' : dec === 'r' ? 'Rejected' : 'Awaiting',
+        statusBg: dec === 'a' ? 'rgba(4,184,148,.13)' : dec === 'r' ? 'rgba(229,72,77,.1)' : 'rgba(245,165,36,.15)',
+        statusFg: dec === 'a' ? '#036c57' : dec === 'r' ? '#c03538' : '#8a5200',
+        sel: !!s.dSel[c.id] && !dec,
+        focused: s.dFocus === i,
+        rowBg: s.dFocus === i ? '#f3f1ea' : 'transparent',
+        toggle: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.setState({ dSel: { ...s.dSel, [c.id]: !s.dSel[c.id] } }); },
+        focus: () => this.setState({ dFocus: i })
+      };
+    });
+    const dFocusClaim = claims[s.dFocus];
+    const dSelCount = claims.filter(c => c.sel).length;
+
+    return {
+      // shared
+      deadlineBanner: 'Submit by ' + ad + ' July to be paid in the ' + pd + ' July payment run',
+      phoneBanner: 'Approve by ' + ad + ' July · payment run ' + pd + ' July',
+      approvalDayLabel: ad + ' July', paymentDayLabel: pd + ' July',
+      syncLabel: s.syncState === 1 ? 'Syncing from Xero…' : s.syncState === 2 ? 'Synced just now' : 'Synced today 04:00',
+      syncDot: s.syncState === 1 ? '#f5a524' : '#08f2c7',
+      syncing: s.syncState === 1,
+      doSync: this.doSync,
+      // packs
+      sofaR: this.sofa.r, sofaD: this.sofa.d,
+      // dashboard
+      filters, funds, cardsR, cardsD, cardsG,
+      fundCountLabel: funds.length + ' of 60 funds shown · balances from last sync',
+      detail, hasDetail: !!detail,
+      closeDetail: () => this.setState({ detailId: null }),
+      // approvals
+      claims, dFocusClaim, dSelCount,
+      hasSelection: dSelCount > 0,
+      bulkApprove: () => {
+        const dec = { ...s.decisions };
+        claims.forEach(c => { if (c.sel) dec[c.id] = 'a'; });
+        this.setState({ decisions: dec, dSel: {} });
+      },
+      pClaim, pHas: !!pClaim,
+      pProgress: pClaim ? (done + 1) + ' of ' + this.claimsData.length : '',
+      pApprove: () => { if (pClaim) this.setState({ decisions: { ...s.decisions, [pClaim.id]: 'a' }, pIdx: 0 }); },
+      pReject: () => { if (pClaim) this.setState({ decisions: { ...s.decisions, [pClaim.id]: 'r' }, pIdx: 0 }); },
+      pDoneAll: !pClaim,
+      pSummary: approvedN + ' approved · ' + rejectedN + ' rejected',
+      pReset: () => this.setState({ decisions: {}, pIdx: 0, dSel: {} }),
+      approvedCount: approvedN,
+      queueCountLabel: this.claimsData.filter(c => !s.decisions[c.id]).length + ' awaiting',
+      // expense form
+      step1: s.step === 1, step2: s.step === 2, step3: s.step === 3,
+      stepLabel: 'Step ' + s.step + ' of 3',
+      goStep1: () => this.setState({ step: 1 }),
+      goStep2: () => this.setState({ step: 2 }),
+      goStep3: () => this.setState({ step: 3 }),
+      stepNext: () => this.setState({ step: Math.min(3, s.step + 1) }),
+      stepBack: () => this.setState({ step: Math.max(1, s.step - 1) }),
+      st1bg: s.step === 1 ? '#211951' : '#fff', st1fg: s.step === 1 ? '#fbfaf7' : '#4a4740',
+      st2bg: s.step === 2 ? '#211951' : '#fff', st2fg: s.step === 2 ? '#fbfaf7' : '#4a4740',
+      st3bg: s.step === 3 ? '#211951' : '#fff', st3fg: s.step === 3 ? '#fbfaf7' : '#4a4740',
+      receipts: this.receiptsData.map(r => ({
+        ...r,
+        okNow: r.ok || s.recConfirmed,
+        showConfirm: !r.ok && !s.recConfirmed,
+        cardBd: (r.ok || s.recConfirmed) ? '#ebe9e3' : '#f5a524',
+        cardBg: (r.ok || s.recConfirmed) ? '#fff' : 'rgba(245,165,36,.06)',
+        confLabel: (r.ok || s.recConfirmed) ? (s.recConfirmed && !r.ok ? 'Confirmed by you' : r.conf + '% confident') : r.conf + '% — please check',
+        confFg: (r.ok || s.recConfirmed) ? '#036c57' : '#8a5200'
+      })),
+      confirmReceipt: () => this.setState({ recConfirmed: true }),
+      recNeedsCheck: !s.recConfirmed,
+      // imports
+      tabHsbc: s.impTab === 'hsbc', tabEpworth: s.impTab === 'epworth',
+      setHsbc: () => this.setState({ impTab: 'hsbc' }),
+      setEpworth: () => this.setState({ impTab: 'epworth' }),
+      thBg: s.impTab === 'hsbc' ? '#211951' : 'transparent', thFg: s.impTab === 'hsbc' ? '#fbfaf7' : '#4a4740',
+      teBg: s.impTab === 'epworth' ? '#211951' : 'transparent', teFg: s.impTab === 'epworth' ? '#fbfaf7' : '#4a4740',
+      epworthRows: this.epworthRows.map(r => ({ ...r, unmapped: !r.mapped, fund: r.fund || '' })),
+      // integrity accordions
+      io1: s.ioOpen === 1, io2: s.ioOpen === 2, io3: s.ioOpen === 3, io4: s.ioOpen === 4,
+      tog1: () => this.setState({ ioOpen: s.ioOpen === 1 ? 0 : 1 }),
+      tog2: () => this.setState({ ioOpen: s.ioOpen === 2 ? 0 : 2 }),
+      tog3: () => this.setState({ ioOpen: s.ioOpen === 3 ? 0 : 3 }),
+      tog4: () => this.setState({ ioOpen: s.ioOpen === 4 ? 0 : 4 })
+    };
+  }
+}
+</script>
+</body>
+</html>

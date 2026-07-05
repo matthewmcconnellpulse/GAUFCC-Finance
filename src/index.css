@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-paper-3 text-ink font-sans text-sm;
+  }
+  ::selection {
+    background: rgba(8, 242, 199, 0.35);
+  }
+}
+
+@layer components {
+  /* Register table pattern — headers are quiet small caps, figures are mono */
+  .th-register {
+    @apply text-left px-4 py-2 bg-paper-2 text-[9.5px] font-medium uppercase tracking-[.12em] text-stone-500;
+  }
+  .td-register {
+    @apply px-4 py-2.5 border-t border-stone-150 align-middle;
+  }
+  .figure {
+    @apply font-mono tabular-nums;
+  }
+  .input-base {
+    @apply w-full rounded-control border border-stone-300 bg-white px-3 py-2 text-sm text-ink placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-mint/60 focus:border-stone-400;
+  }
+  .label-base {
+    @apply block text-[11px] font-medium uppercase tracking-[.12em] text-stone-500 mb-1.5;
+  }
+}
+
+/* Print styles — board packs and one-pagers must be print-ready */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+}
