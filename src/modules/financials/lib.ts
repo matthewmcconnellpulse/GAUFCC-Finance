@@ -132,6 +132,8 @@ export function endOfLastMonth(): string {
 export interface TransactionFilters {
   search: string
   accountCode: string // '' = all
+  /** '' = all; income = REVENUE-class accounts, expenditure = EXPENSE-class */
+  accountClass: '' | 'REVENUE' | 'EXPENSE'
   sourceType: string // '' = all
   fundOptionId: string // '' = all (matches tracking_option_1_id)
   dateFrom: string // '' = open
@@ -141,6 +143,7 @@ export interface TransactionFilters {
 export const EMPTY_TXN_FILTERS: TransactionFilters = {
   search: '',
   accountCode: '',
+  accountClass: '',
   sourceType: '',
   fundOptionId: '',
   dateFrom: '',
@@ -157,10 +160,16 @@ export interface TransactionPage {
 const ALL_CHUNK = 1000
 const ALL_CAP = 25000
 
+/**
+ * `classCodes` carries the account codes matching filters.accountClass (the
+ * class lives on xero_accounts, not the transaction row) — the page computes
+ * it from the loaded account list.
+ */
 export async function fetchTransactions(
   filters: TransactionFilters,
   page: number,
   pageSize: PageSize,
+  classCodes: string[] | null,
 ): Promise<TransactionPage> {
   const buildQuery = () => {
     let query = supabase
@@ -170,6 +179,7 @@ export async function fetchTransactions(
       .order('created_at', { ascending: false })
 
     if (filters.accountCode) query = query.eq('account_code', filters.accountCode)
+    if (classCodes) query = query.in('account_code', classCodes)
     if (filters.sourceType) query = query.eq('source_type', filters.sourceType)
     if (filters.fundOptionId) query = query.eq('tracking_option_1_id', filters.fundOptionId)
     if (filters.dateFrom) query = query.gte('date', filters.dateFrom)

@@ -9,7 +9,7 @@
  *   v_integrity_gl_recon, table integrity_stamps.
  */
 import { supabase } from '@/lib/supabase'
-import type { Fund, FundType, FundWarning, XeroTransaction } from '@/types/db'
+import type { Fund, FundNote, FundType, FundWarning, Profile, SorpCategory, XeroTransaction } from '@/types/db'
 
 // ── View row types ───────────────────────────────────────────────────────────
 
@@ -148,14 +148,22 @@ export async function resolveTrackingOptionIds(trackingOptionId: string | null):
 export interface AccountInfo {
   name: string
   class: string | null
+  sorp: SorpCategory | null
 }
 
 export async function fetchAccountMap(): Promise<Map<string, AccountInfo>> {
-  const { data, error } = await supabase.from('xero_accounts').select('code, name, class')
+  const { data, error } = await supabase
+    .from('xero_accounts')
+    .select('code, name, class, sorp_category')
   if (error) throw new Error(error.message)
   const map = new Map<string, AccountInfo>()
-  for (const row of (data ?? []) as Array<{ code: string | null; name: string; class: string | null }>) {
-    if (row.code) map.set(row.code, { name: row.name, class: row.class })
+  for (const row of (data ?? []) as Array<{
+    code: string | null
+    name: string
+    class: string | null
+    sorp_category: SorpCategory | null
+  }>) {
+    if (row.code) map.set(row.code, { name: row.name, class: row.class, sorp: row.sorp_category })
   }
   return map
 }
@@ -163,6 +171,7 @@ export async function fetchAccountMap(): Promise<Map<string, AccountInfo>> {
 // ── P&L grouping ─────────────────────────────────────────────────────────────
 
 export interface PlRow {
+  sorp: SorpCategory | null
   account_code: string
   account_name: string
   amount: number
@@ -202,6 +211,7 @@ export function buildPl(
       ? account.class.toUpperCase() === 'REVENUE'
       : entry.incomeVotes * 2 >= entry.total
     const row: PlRow = {
+      sorp: account?.sorp ?? null,
       account_code: code,
       account_name: account?.name ?? (code === '—' ? 'Uncoded' : `Account ${code}`),
       amount: Math.abs(entry.net),
@@ -438,4 +448,84 @@ export const FUND_TYPE_BLURBS: Record<FundType, string> = {
   endowment: 'capital held on trust — income may be spent, capital preserved',
   general: 'free reserves',
   dormant: 'no recent movement — kept on the register for the record',
+}
+
+// ── Fund notes ───────────────────────────────────────────────────────────────
+
+/** fund_notes row with author and FAO names embedded (null for roles that cannot read profiles). */
+export type FundNoteRow = FundNote & {
+  author: { full_name: string } | null
+  fao: { full_name: string } | null
+}
+
+export async function fetchFundNotes(fundId: string): Promise<FundNoteRow[]> {
+  const { data, error } = await supabase
+    .from('fund_notes')
+    .select(
+      '*, author:profiles!fund_notes_created_by_fkey(full_name), fao:profiles!fund_notes_attention_of_fkey(full_name)',
+    )
+    .eq('fund_id', fundId)
+    .order('created_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as unknown as FundNoteRow[]
+}
+
+export async function addFundNote(
+  fundId: string,
+  authorId: string,
+  body: string,
+  attentionOf: string | null,
+): Promise<void> {
+  const { error } = await supabase.from('fund_notes').insert({
+    fund_id: fundId,
+    body,
+    attention_of: attentionOf,
+    created_by: authorId,
+  })
+  if (error) throw new Error(error.message)
+}
+
+export async function updateFundNote(
+  id: string,
+  patch: { body: string; attention_of: string | null },
+): Promise<void> {
+  const { error } = await supabase
+    .from('fund_notes')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+export async function deleteFundNote(id: string): Promise<void> {
+  const { error } = await supabase.from('fund_notes').delete().eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+// ── Fund managers (person responsible) ───────────────────────────────────────
+
+/** Active users a fund can be assigned to / a note flagged for. Pulse + CEO only (profiles RLS). */
+export async function fetchAssignableProfiles(): Promise<Pick<Profile, 'id' | 'full_name' | 'role'>[]> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, full_name, role')
+    .eq('active', true)
+    .order('full_name', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as Pick<Profile, 'id' | 'full_name' | 'role'>[]
+}
+
+export async function addFundManager(fundId: string, profileId: string): Promise<void> {
+  const { error } = await supabase
+    .from('fund_managers')
+    .insert({ fund_id: fundId, profile_id: profileId, whole_board: false })
+  if (error) throw new Error(error.message)
+}
+
+export async function removeFundManager(fundId: string, profileId: string): Promise<void> {
+  const { error } = await supabase
+    .from('fund_managers')
+    .delete()
+    .eq('fund_id', fundId)
+    .eq('profile_id', profileId)
+  if (error) throw new Error(error.message)
 }

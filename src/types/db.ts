@@ -85,6 +85,17 @@ export interface XeroConnection {
   updated_at: string
 }
 
+/** Charities SORP (FRS 102) SOFA headings — accounts map onto these. */
+export type SorpCategory =
+  | 'donations_legacies'
+  | 'charitable_activities_income'
+  | 'other_trading'
+  | 'investments_income'
+  | 'other_income'
+  | 'raising_funds'
+  | 'charitable_activities_expenditure'
+  | 'other_expenditure'
+
 export interface XeroAccount {
   id: string
   account_id: string // Xero AccountID
@@ -94,6 +105,8 @@ export interface XeroAccount {
   class: string | null
   reporting_code: string | null
   status: string | null
+  /** SOFA heading; null = not yet mapped (Settings → SORP mapping) */
+  sorp_category: SorpCategory | null
   updated_at: string
 }
 
@@ -189,6 +202,17 @@ export interface Fund {
   /** null until Pulse classifies a newly-synced tracking option */
   classified_at: string | null
   active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface FundNote {
+  id: string
+  fund_id: string
+  body: string
+  /** "For the attention of" — profile id, optional */
+  attention_of: string | null
+  created_by: string
   created_at: string
   updated_at: string
 }

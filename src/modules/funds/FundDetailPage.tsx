@@ -14,30 +14,37 @@ import {
   LoadingRows,
   Paginator,
   SectionLabel,
+  Select,
   Skeleton,
   StatusChip,
-  Textarea,
   WarningBadge,
+  cx,
   type PageSize,
 } from '@/components/ui'
 import { formatDate, formatMoney, formatMovement } from '@/lib/format'
+import { SORP_EXPENDITURE, SORP_INCOME, sorpLabel } from '@/lib/sorp'
 import { supabase } from '@/lib/supabase'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
-import type { Fund, XeroTransaction } from '@/types/db'
+import type { Fund, SorpCategory, XeroTransaction } from '@/types/db'
 import BalanceChart from './BalanceChart'
+import FundNotesCard from './FundNotesCard'
 import { PeriodSelect } from './components'
 import {
+  addFundManager,
   buildPl,
   cumulativeBalances,
   fetchAccountMap,
+  fetchAssignableProfiles,
   fetchFund,
   fetchFundMonthly,
   fetchOpenWarnings,
   presetRange,
+  removeFundManager,
   resolveTrackingOptionIds,
   sourceTypeLabel,
   type FundManagerRow,
   type Period,
+  type PlRow,
   type VFundBalance,
 } from './lib'
 
@@ -82,10 +89,11 @@ export default function FundDetailPage() {
   const [period, setPeriod] = useState<Period>(() => ({ preset: 'fy', ...presetRange('fy') }))
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<PageSize>(25)
+  const [classFilter, setClassFilter] = useState<'' | 'REVENUE' | 'EXPENSE'>('')
 
   useEffect(() => {
     setPage(0)
-  }, [period.start, period.end, pageSize])
+  }, [period.start, period.end, pageSize, classFilter])
 
   const core = useSupabaseQuery(async () => {
     if (!id) return null
@@ -123,8 +131,14 @@ export default function FundDetailPage() {
     if (!id) return null
     const ids = await fetchTrackingIds(id)
     if (ids.length === 0) return { rows: [] as XeroTransaction[], count: 0 }
-    const buildQuery = () =>
-      supabase
+    // Income/expenditure filtering happens via the account class: collect the
+    // codes of the requested class and constrain the query to them.
+    const classCodes =
+      classFilter && accounts.data
+        ? [...accounts.data.entries()].filter(([, a]) => a.class === classFilter).map(([c]) => c)
+        : null
+    const buildQuery = () => {
+      let q = supabase
         .from('xero_transactions')
         .select('*', { count: 'exact' })
         .in('tracking_option_1_id', ids)
@@ -132,6 +146,9 @@ export default function FundDetailPage() {
         .lte('date', period.end)
         .order('date', { ascending: false })
         .order('line_id', { ascending: true })
+      if (classCodes) q = q.in('account_code', classCodes)
+      return q
+    }
 
     if (pageSize === 'all') {
       const rows: XeroTransaction[] = []
@@ -152,7 +169,7 @@ export default function FundDetailPage() {
     )
     if (error) throw new Error(error.message)
     return { rows: (data ?? []) as XeroTransaction[], count: count ?? 0 }
-  }, [id, period.start, period.end, page, pageSize])
+  }, [id, period.start, period.end, page, pageSize, classFilter, accounts.data])
 
   const pl = useMemo(() => {
     if (!plRows.data || plRows.data.unlinked) return null
@@ -163,33 +180,6 @@ export default function FundDetailPage() {
     if (!core.data?.fund) return []
     return cumulativeBalances(core.data.monthly, core.data.fund.opening_balance).slice(-36)
   }, [core.data])
-
-  // Notes (funds.description) — editable by Pulse only
-  const [notes, setNotes] = useState('')
-  const [notesState, setNotesState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const [notesError, setNotesError] = useState<string | null>(null)
-  const description = core.data?.fund?.description ?? ''
-  useEffect(() => {
-    setNotes(description)
-    setNotesState('idle')
-  }, [description])
-
-  async function saveNotes() {
-    if (!id) return
-    setNotesState('saving')
-    setNotesError(null)
-    const { error } = await supabase
-      .from('funds')
-      .update({ description: notes.trim() === '' ? null : notes.trim() })
-      .eq('id', id)
-    if (error) {
-      setNotesState('error')
-      setNotesError(error.message)
-    } else {
-      setNotesState('saved')
-      core.refetch()
-    }
-  }
 
   if (core.loading) {
     return (
@@ -234,9 +224,6 @@ export default function FundDetailPage() {
   const balanceRow = core.data?.balanceRow ?? null
   const managers = core.data?.managers ?? []
   const warnings = core.data?.warnings ?? []
-  const managerNames = managers
-    .map((m) => m.profiles?.full_name)
-    .filter((n): n is string => Boolean(n))
 
   return (
     <div>
@@ -252,9 +239,7 @@ export default function FundDetailPage() {
           </div>
           <h1 className="font-display text-[28px] leading-tight text-ink mt-2">{fund.name}</h1>
           {fund.purpose ? <p className="text-[12.5px] text-stone-700 mt-2 leading-relaxed">{fund.purpose}</p> : null}
-          <p className="text-[11px] text-stone-500 mt-2">
-            {managerNames.length > 0 ? `Fund contact — ${managerNames.join(', ')}` : 'No fund manager linked'}
-          </p>
+          <ManagersInline fundId={fund.id} managers={managers} onChanged={core.refetch} />
         </div>
         <div className="text-left sm:text-right">
           <div className="font-display font-light text-[36px] text-indigo leading-none figure">
@@ -331,8 +316,29 @@ export default function FundDetailPage() {
 
       {/* Transactions */}
       <Card className="mb-5 overflow-hidden">
-        <div className="px-5 pt-4">
+        <div className="px-5 pt-4 flex flex-wrap items-center justify-between gap-2">
           <SectionLabel>Transactions</SectionLabel>
+          <div className="flex gap-1.5 pb-2">
+            {([
+              ['', 'All'],
+              ['REVENUE', 'Income'],
+              ['EXPENSE', 'Expenditure'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setClassFilter(value)}
+                className={cx(
+                  'rounded-full border px-3 py-1 text-[11px] font-medium transition-colors',
+                  classFilter === value
+                    ? 'border-indigo bg-indigo text-white'
+                    : 'border-stone-300 text-stone-600 hover:bg-paper-2',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         {txns.loading ? (
           <LoadingRows cols={6} rows={8} />
@@ -399,40 +405,124 @@ export default function FundDetailPage() {
       </Card>
 
       {/* Notes */}
-      <Card>
-        <div className="px-5 py-4">
-          <SectionLabel>Notes</SectionLabel>
-          {isPulse ? (
-            <>
-              <Textarea
-                value={notes}
-                onChange={(e) => {
-                  setNotes(e.target.value)
-                  setNotesState('idle')
-                }}
-                placeholder="Background, restrictions, correspondence — visible to everyone who can see this fund"
-              />
-              <div className="flex items-center gap-3 mt-3">
-                <Button
-                  size="sm"
-                  onClick={() => void saveNotes()}
-                  disabled={notesState === 'saving' || notes === description}
+      <FundNotesCard fundId={fund.id} />
+    </div>
+  )
+}
+
+/**
+ * Person responsible — fund_managers chips under the fund title. Everyone
+ * sees who is responsible; the Pulse admin assigns and removes (RLS:
+ * fund_managers writes are admin-only).
+ */
+function ManagersInline({
+  fundId,
+  managers,
+  onChanged,
+}: {
+  fundId: string
+  managers: FundManagerRow[]
+  onChanged: () => void
+}) {
+  const { isAdmin } = usePermissions()
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const people = useSupabaseQuery(
+    () => (isAdmin ? fetchAssignableProfiles() : Promise.resolve([])),
+    [isAdmin],
+  )
+  const assignedIds = new Set(managers.map((m) => m.profile_id))
+  const candidates = (people.data ?? []).filter((p) => !assignedIds.has(p.id))
+
+  async function assign(profileId: string) {
+    if (!profileId) return
+    setBusy(true)
+    setError(null)
+    try {
+      await addFundManager(fundId, profileId)
+      setAdding(false)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The assignment failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function unassign(profileId: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      await removeFundManager(fundId, profileId)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The removal failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] text-stone-500">Responsible —</span>
+        {managers.length === 0 ? (
+          <span className="text-[11px] text-stone-500">no one assigned</span>
+        ) : (
+          managers.map((m) => (
+            <span
+              key={m.profile_id}
+              className="inline-flex items-center gap-1 rounded-full bg-indigo/8 border border-indigo/20 px-2.5 py-0.5 text-[11px] text-indigo"
+            >
+              {m.profiles?.full_name ?? '—'}
+              {m.whole_board ? ' (whole board)' : ''}
+              {isAdmin ? (
+                <button
+                  type="button"
+                  aria-label={`Remove ${m.profiles?.full_name ?? 'manager'}`}
+                  className="text-indigo/60 hover:text-danger-ink"
+                  disabled={busy}
+                  onClick={() => void unassign(m.profile_id)}
                 >
-                  {notesState === 'saving' ? 'Saving…' : 'Save notes'}
-                </Button>
-                {notesState === 'saved' ? <span className="text-[11.5px] text-mint-900">Saved</span> : null}
-                {notesState === 'error' && notesError ? (
-                  <span className="text-[11.5px] text-danger-ink">{notesError}</span>
-                ) : null}
-              </div>
-            </>
-          ) : description ? (
-            <p className="text-[12.5px] text-stone-700 leading-relaxed whitespace-pre-wrap">{description}</p>
+                  ×
+                </button>
+              ) : null}
+            </span>
+          ))
+        )}
+        {isAdmin ? (
+          adding ? (
+            <Select
+              autoFocus
+              defaultValue=""
+              disabled={busy}
+              onChange={(e) => void assign(e.target.value)}
+              onBlur={() => setAdding(false)}
+              className="!w-auto py-1 text-[11.5px]"
+              aria-label="Assign a person responsible"
+            >
+              <option value="" disabled>
+                Choose a person…
+              </option>
+              {candidates.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.full_name} ({p.role.replace('_', ' ')})
+                </option>
+              ))}
+            </Select>
           ) : (
-            <p className="text-[12px] text-stone-500">No notes have been added for this fund.</p>
-          )}
-        </div>
-      </Card>
+            <button
+              type="button"
+              className="text-[11px] text-indigo underline underline-offset-2"
+              onClick={() => setAdding(true)}
+            >
+              + Assign
+            </button>
+          )
+        ) : null}
+      </div>
+      {error ? <p className="text-[11px] text-danger-ink mt-1">{error}</p> : null}
     </div>
   )
 }
@@ -454,12 +544,37 @@ function accountLabel(code: string | null, accounts: Map<string, { name: string;
   return name ? `${code} · ${name}` : code
 }
 
+/** Rows grouped under their SORP (SOFA) heading, headings in statutory order. */
+function groupBySorp(
+  rows: PlRow[],
+  order: SorpCategory[],
+): Array<{ key: string; label: string; rows: PlRow[]; total: number }> {
+  const byCategory = new Map<string, PlRow[]>()
+  for (const row of rows) {
+    const key = row.sorp ?? 'unmapped'
+    const list = byCategory.get(key)
+    if (list) list.push(row)
+    else byCategory.set(key, [row])
+  }
+  const keys: string[] = [...order.filter((c) => byCategory.has(c))]
+  if (byCategory.has('unmapped')) keys.push('unmapped')
+  return keys.map((key) => {
+    const groupRows = byCategory.get(key) ?? []
+    return {
+      key,
+      label: key === 'unmapped' ? 'Unmapped' : sorpLabel(key as SorpCategory),
+      rows: groupRows,
+      total: groupRows.reduce((s, r) => s + r.amount, 0),
+    }
+  })
+}
+
 function PlTable({ pl }: { pl: ReturnType<typeof buildPl> }) {
   const net = pl.totalIncome - pl.totalExpenditure
   return (
     <div className="text-[12.5px]">
-      <PlSection label="Income" rows={pl.income} total={pl.totalIncome} positive />
-      <PlSection label="Expenditure" rows={pl.expenditure} total={pl.totalExpenditure} />
+      <PlSection label="Income" rows={pl.income} sorpOrder={SORP_INCOME} total={pl.totalIncome} positive />
+      <PlSection label="Expenditure" rows={pl.expenditure} sorpOrder={SORP_EXPENDITURE} total={pl.totalExpenditure} />
       <div className="flex justify-between items-center pt-3 mt-3 border-t border-stone-300">
         <span className="font-medium text-ink">Net movement</span>
         <span className={`figure font-medium ${net >= 0 ? 'text-mint-900' : 'text-stone-900'}`}>
@@ -473,30 +588,46 @@ function PlTable({ pl }: { pl: ReturnType<typeof buildPl> }) {
 function PlSection({
   label,
   rows,
+  sorpOrder,
   total,
   positive = false,
 }: {
   label: string
-  rows: ReturnType<typeof buildPl>['income']
+  rows: PlRow[]
+  sorpOrder: SorpCategory[]
   total: number
   positive?: boolean
 }) {
+  const groups = groupBySorp(rows, sorpOrder)
   return (
     <div className="mb-4 last:mb-0">
       <div className="text-[10px] font-medium uppercase tracking-[.12em] text-stone-500 pb-1.5 border-b border-stone-150">
         {label}
       </div>
-      {rows.length === 0 ? (
+      {groups.length === 0 ? (
         <div className="py-2 text-[11.5px] text-stone-500">None in this period</div>
       ) : (
-        <ul>
-          {rows.map((r) => (
-            <li key={r.account_code} className="flex justify-between gap-4 py-1.5 border-b border-paper-3">
-              <span className="text-stone-700 truncate">{r.account_name}</span>
-              <span className="figure text-[11.5px] whitespace-nowrap">{formatMoney(r.amount)}</span>
-            </li>
-          ))}
-        </ul>
+        groups.map((group) => (
+          <div key={group.key}>
+            <div className="flex justify-between gap-4 pt-2 pb-0.5">
+              <span className="text-[10.5px] font-medium text-indigo/80">{group.label}</span>
+              <span className="figure text-[10.5px] text-stone-500 whitespace-nowrap">
+                {formatMoney(group.total)}
+              </span>
+            </div>
+            <ul>
+              {group.rows.map((r) => (
+                <li
+                  key={r.account_code}
+                  className="flex justify-between gap-4 py-1.5 pl-3 border-b border-paper-3"
+                >
+                  <span className="text-stone-700 truncate">{r.account_name}</span>
+                  <span className="figure text-[11.5px] whitespace-nowrap">{formatMoney(r.amount)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
       )}
       <div className="flex justify-between pt-1.5">
         <span className="text-stone-500 text-[11px]">Total {label.toLowerCase()}</span>

@@ -48,16 +48,25 @@ export default function TransactionsPage() {
   const accounts = useSupabaseQuery(fetchActiveAccounts, [])
   const funds = useSupabaseQuery(fetchFundsForFilter, [])
   const txns = useSupabaseQuery(
-    () => fetchTransactions(filters, page, pageSize),
+    () => {
+      const classCodes = filters.accountClass
+        ? (accounts.data ?? [])
+            .filter((a) => a.class === filters.accountClass && a.code)
+            .map((a) => a.code as string)
+        : null
+      return fetchTransactions(filters, page, pageSize, classCodes)
+    },
     [
       filters.search,
       filters.accountCode,
+      filters.accountClass,
       filters.sourceType,
       filters.fundOptionId,
       filters.dateFrom,
       filters.dateTo,
       page,
       pageSize,
+      accounts.data,
     ],
   )
 
@@ -104,6 +113,17 @@ export default function TransactionsPage() {
               aria-label="Search transactions"
             />
           </form>
+          <Select
+            value={filters.accountClass}
+            onChange={(e) =>
+              setFilter({ accountClass: e.target.value as '' | 'REVENUE' | 'EXPENSE' })
+            }
+            aria-label="Filter income or expenditure"
+          >
+            <option value="">Income + expenditure</option>
+            <option value="REVENUE">Income only</option>
+            <option value="EXPENSE">Expenditure only</option>
+          </Select>
           <Select
             value={filters.accountCode}
             onChange={(e) => setFilter({ accountCode: e.target.value })}
