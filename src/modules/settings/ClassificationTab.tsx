@@ -24,7 +24,7 @@ import type { Fund, FundType, WarningRules } from '@/types/db'
 import { classifyFund, fetchAllFunds } from './lib'
 import { SectionCard } from './components'
 
-const FUND_TYPES: FundType[] = ['restricted', 'designated', 'general', 'dormant']
+const FUND_TYPES: FundType[] = ['restricted', 'endowment', 'designated', 'general', 'dormant']
 
 export default function ClassificationTab() {
   const { isPulse } = usePermissions()

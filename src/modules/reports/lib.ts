@@ -227,15 +227,23 @@ export const SCOPE_LABELS: Record<ReportScope, string> = {
 export const FUND_TYPE_LABELS: Record<FundType, string> = {
   restricted: 'Restricted',
   designated: 'Designated',
+  endowment: 'Endowment',
   general: 'General',
   dormant: 'Dormant',
 }
 
-export const FUND_TYPE_ORDER: FundType[] = ['restricted', 'designated', 'general', 'dormant']
+export const FUND_TYPE_ORDER: FundType[] = [
+  'restricted',
+  'endowment',
+  'designated',
+  'general',
+  'dormant',
+]
 
 export const FUND_TYPE_ACCENTS: Record<FundType, string> = {
   restricted: '#211951',
   designated: '#16b6ce',
+  endowment: '#9747ff',
   general: '#08f2c7',
   dormant: '#d6d3c9',
 }
@@ -606,8 +614,10 @@ export function buildReportModel(sources: ReportSources, state: BuilderState): R
   }
 
   const split: ReportSplit = { restricted: 0, unrestricted: 0, dormant: 0 }
+  // Endowment capital is not free reserves — it sits with restricted in the
+  // restricted-vs-unrestricted split.
   for (const r of rows) {
-    if (r.fund_type === 'restricted') split.restricted += r.closing
+    if (r.fund_type === 'restricted' || r.fund_type === 'endowment') split.restricted += r.closing
     else if (r.fund_type === 'dormant') split.dormant += r.closing
     else split.unrestricted += r.closing
   }

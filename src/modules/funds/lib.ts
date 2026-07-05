@@ -407,11 +407,18 @@ export function sourceTypeLabel(sourceType: string): string {
 
 // ── Fund-type presentation ───────────────────────────────────────────────────
 
-export const FUND_TYPE_ORDER: FundType[] = ['restricted', 'designated', 'general', 'dormant']
+export const FUND_TYPE_ORDER: FundType[] = [
+  'restricted',
+  'endowment',
+  'designated',
+  'general',
+  'dormant',
+]
 
 export const FUND_TYPE_ACCENTS: Record<FundType, string> = {
   restricted: '#211951',
   designated: '#16b6ce',
+  endowment: '#9747ff',
   general: '#08f2c7',
   dormant: '#d6d3c9',
 }
@@ -420,6 +427,7 @@ export const FUND_TYPE_ACCENTS: Record<FundType, string> = {
 export const FUND_TYPE_ROW_ACCENTS: Record<FundType, string> = {
   restricted: 'rgba(33,25,81,.38)',
   designated: 'rgba(22,182,206,.45)',
+  endowment: 'rgba(151,71,255,.4)',
   general: 'rgba(4,184,148,.45)',
   dormant: 'rgba(179,175,163,.5)',
 }
@@ -427,6 +435,7 @@ export const FUND_TYPE_ROW_ACCENTS: Record<FundType, string> = {
 export const FUND_TYPE_BLURBS: Record<FundType, string> = {
   restricted: 'may only be applied to their stated purposes',
   designated: 'earmarked by the Board, releasable by resolution',
+  endowment: 'capital held on trust — income may be spent, capital preserved',
   general: 'free reserves',
   dormant: 'no recent movement — kept on the register for the record',
 }

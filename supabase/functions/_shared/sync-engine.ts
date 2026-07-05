@@ -157,11 +157,61 @@ interface XeroTrackingCategoryApi {
   Options?: XeroTrackingOptionApi[]
 }
 
+/**
+ * Line-item tracking as Xero actually returns it on GET: TrackingCategoryID
+ * plus the category Name and option name (`Option`). TrackingOptionID is
+ * routinely OMITTED from document responses — resolution must fall back to
+ * looking the option up by name against the synced tracking metadata.
+ */
 interface XeroLineTrackingApi {
   TrackingCategoryID?: string
   TrackingOptionID?: string
   Name?: string
   Option?: string
+}
+
+/**
+ * Everything flattening needs to resolve a line's tracking entries to
+ * TrackingOptionIDs, built fresh from the TrackingCategories fetch each run.
+ * Keys are lower-cased; option keys are `${categoryId}|${option name}`.
+ */
+interface TrackingIndex {
+  positionByCategoryId: Map<string, 1 | 2>
+  categoryIdByName: Map<string, string>
+  optionIdByCategoryAndName: Map<string, string>
+}
+
+function emptyTrackingIndex(): TrackingIndex {
+  return {
+    positionByCategoryId: new Map(),
+    categoryIdByName: new Map(),
+    optionIdByCategoryAndName: new Map(),
+  }
+}
+
+/**
+ * Resolve one line tracking entry to (position, option id). Category comes
+ * from TrackingCategoryID or, failing that, the category Name; the option
+ * from TrackingOptionID or the option name. Returns null when the entry
+ * cannot be pinned to a synced category/option (e.g. a category archived and
+ * deleted between fetches) — the line simply carries no tracking.
+ */
+function resolveTracking(
+  t: XeroLineTrackingApi,
+  index: TrackingIndex,
+): { position: 1 | 2; optionId: string } | null {
+  const categoryId =
+    t.TrackingCategoryID ??
+    (t.Name ? index.categoryIdByName.get(t.Name.toLowerCase()) : undefined)
+  if (!categoryId) return null
+  const position = index.positionByCategoryId.get(categoryId)
+  if (!position) return null
+  const optionId =
+    t.TrackingOptionID ??
+    (t.Option
+      ? index.optionIdByCategoryAndName.get(`${categoryId}|${t.Option.toLowerCase()}`)
+      : undefined)
+  return optionId ? { position, optionId } : null
 }
 
 interface XeroLineItemApi {
@@ -379,12 +429,14 @@ async function syncContacts(svc: SupabaseClient, modifiedSince?: string): Promis
 
 /**
  * Always a full fetch (endpoint does not support If-Modified-Since; two
- * categories at most). Populates `categoryPosition` (TrackingCategoryID →
- * 1 | 2 by array order) for line flattening.
+ * categories at most). Populates the TrackingIndex (position by category,
+ * plus name → id lookups) that line flattening resolves against — document
+ * responses usually omit TrackingOptionID, so the by-name lookups are what
+ * actually attaches tracking to transaction lines.
  */
 async function syncTrackingCategories(
   svc: SupabaseClient,
-  categoryPosition: Map<string, 1 | 2>,
+  tracking: TrackingIndex,
 ): Promise<number> {
   const { data } = await xeroFetch<{ TrackingCategories?: XeroTrackingCategoryApi[] }>(
     'TrackingCategories',
@@ -397,7 +449,8 @@ async function syncTrackingCategories(
   const optionRows: Record<string, unknown>[] = []
   categories.slice(0, 2).forEach((cat, index) => {
     const position = (index + 1) as 1 | 2
-    categoryPosition.set(cat.TrackingCategoryID, position)
+    tracking.positionByCategoryId.set(cat.TrackingCategoryID, position)
+    tracking.categoryIdByName.set(cat.Name.toLowerCase(), cat.TrackingCategoryID)
     categoryRows.push({
       tracking_category_id: cat.TrackingCategoryID,
       name: cat.Name,
@@ -406,6 +459,10 @@ async function syncTrackingCategories(
       updated_at: nowIso(),
     })
     for (const opt of cat.Options ?? []) {
+      tracking.optionIdByCategoryAndName.set(
+        `${cat.TrackingCategoryID}|${opt.Name.toLowerCase()}`,
+        opt.TrackingOptionID,
+      )
       optionRows.push({
         tracking_option_id: opt.TrackingOptionID,
         tracking_category_id: cat.TrackingCategoryID,
@@ -437,11 +494,11 @@ function flattenDocument(opts: {
   sourceType: SourceType
   sign: 1 | -1
   doc: XeroDocumentApi
-  categoryPosition: Map<string, 1 | 2>
+  tracking: TrackingIndex
   errors: string[]
   docLabel: string
 }): TransactionRow[] {
-  const { docId, sourceType, sign, doc, categoryPosition, errors, docLabel } = opts
+  const { docId, sourceType, sign, doc, tracking, errors, docLabel } = opts
   const dateIso = parseXeroDate(doc.DateString ?? doc.Date)
   if (!dateIso) {
     errors.push(`Skipped ${docLabel} ${docId} — document has no parseable date`)
@@ -494,11 +551,10 @@ function flattenDocument(opts: {
     let tracking1: string | null = null
     let tracking2: string | null = null
     for (const t of li.Tracking ?? []) {
-      const position = t.TrackingCategoryID
-        ? categoryPosition.get(t.TrackingCategoryID)
-        : undefined
-      if (position === 1) tracking1 = t.TrackingOptionID ?? null
-      else if (position === 2) tracking2 = t.TrackingOptionID ?? null
+      const resolved = resolveTracking(t, tracking)
+      if (!resolved) continue
+      if (resolved.position === 1) tracking1 = resolved.optionId
+      else tracking2 = resolved.optionId
     }
     return {
       ...base,
@@ -516,7 +572,7 @@ function flattenDocument(opts: {
 
 async function syncInvoices(
   svc: SupabaseClient,
-  categoryPosition: Map<string, 1 | 2>,
+  tracking: TrackingIndex,
   errors: string[],
   modifiedSince?: string,
 ): Promise<number> {
@@ -539,7 +595,7 @@ async function syncInvoices(
         sourceType: inv.Type,
         sign,
         doc: inv,
-        categoryPosition,
+        tracking,
         errors,
         docLabel: 'invoice',
       }),
@@ -583,7 +639,7 @@ function mapBankTransactionType(type: string): { source: SourceType; sign: 1 | -
 
 async function syncBankTransactions(
   svc: SupabaseClient,
-  categoryPosition: Map<string, 1 | 2>,
+  tracking: TrackingIndex,
   errors: string[],
   modifiedSince?: string,
 ): Promise<number> {
@@ -606,7 +662,7 @@ async function syncBankTransactions(
         sourceType: mapped.source,
         sign: mapped.sign,
         doc: tx,
-        categoryPosition,
+        tracking,
         errors,
         docLabel: 'bank transaction',
       }),
@@ -623,7 +679,7 @@ async function syncBankTransactions(
 
 async function syncCreditNotes(
   svc: SupabaseClient,
-  categoryPosition: Map<string, 1 | 2>,
+  tracking: TrackingIndex,
   errors: string[],
   modifiedSince?: string,
 ): Promise<number> {
@@ -646,7 +702,7 @@ async function syncCreditNotes(
         sourceType: 'CREDIT_NOTE',
         sign,
         doc: cn,
-        categoryPosition,
+        tracking,
         errors,
         docLabel: 'credit note',
       }),
@@ -661,9 +717,27 @@ async function syncCreditNotes(
   )
 }
 
+export type FundType = 'restricted' | 'designated' | 'endowment' | 'general' | 'dormant'
+
+/**
+ * Classify a fund from its Xero tracking-option name. GAUFCC's options are
+ * named "1xx Restricted funds - …" / "1xx - RF …" / "2xx Endowment funds - …"
+ * / "3xx Designated funds - …" / "9xx Unrestricted funds - …", so the words
+ * (not the numbers) decide. Mirrors migration 0022 exactly. Returns null when
+ * no rule matches — that fund stays in the manual classification queue.
+ */
+export function classifyFundName(name: string): FundType | null {
+  if (/\bendowment/i.test(name)) return 'endowment'
+  if (/\bdesignated/i.test(name)) return 'designated'
+  if (/\bunrestricted/i.test(name)) return 'general'
+  if (/\brestricted/i.test(name) || /\bRF\b/.test(name)) return 'restricted'
+  return null
+}
+
 /**
  * Create a funds row for any tracking option of the position-1 category that
- * lacks one. New funds arrive unclassified (classified_at null, fund_type
+ * lacks one. Funds whose names match the GAUFCC naming scheme are classified
+ * on arrival; the rest land unclassified (classified_at null, fund_type
  * 'general') and surface in Settings → fund classification queue for Pulse.
  */
 async function autoCreateFunds(svc: SupabaseClient): Promise<number> {
@@ -699,16 +773,19 @@ async function autoCreateFunds(svc: SupabaseClient): Promise<number> {
   )
   if (!missing.length) return 0
 
-  const rows = missing.map((o) => ({
-    tracking_option_id: o.tracking_option_id,
-    name: o.name,
-    fund_type: 'general',
-    opening_balance: 0,
-    opening_balance_date: null,
-    warning_rules: {},
-    classified_at: null,
-    active: true,
-  }))
+  const rows = missing.map((o) => {
+    const autoType = classifyFundName(o.name)
+    return {
+      tracking_option_id: o.tracking_option_id,
+      name: o.name,
+      fund_type: autoType ?? 'general',
+      opening_balance: 0,
+      opening_balance_date: null,
+      warning_rules: {},
+      classified_at: autoType ? nowIso() : null,
+      active: true,
+    }
+  })
   const { error } = await svc.from('funds').insert(rows)
   if (error) throw new Error(`Could not auto-create funds: ${error.message}`)
   return rows.length
@@ -719,7 +796,7 @@ async function autoCreateFunds(svc: SupabaseClient): Promise<number> {
 interface FundForWarnings {
   id: string
   name: string
-  fund_type: 'restricted' | 'designated' | 'general' | 'dormant'
+  fund_type: FundType
   opening_balance: number
   warning_rules: WarningRules | null
 }
@@ -745,7 +822,9 @@ function evaluateFund(
       fund_id: fund.id,
       rule: 'deficit',
       message: `Fund balance is in deficit at ${money(balance)}`,
-      severity: fund.fund_type === 'restricted' ? 'red' : 'amber',
+      // Spending restricted money — or endowment capital — you do not hold
+      // is a breached policy, not a bookkeeping quirk.
+      severity: fund.fund_type === 'restricted' || fund.fund_type === 'endowment' ? 'red' : 'amber',
     })
   }
 
@@ -934,13 +1013,24 @@ async function runWarningEngine(svc: SupabaseClient): Promise<void> {
 
 // ── The run ──────────────────────────────────────────────────────────────────
 
+export interface RunSyncOptions {
+  /**
+   * Ignore If-Modified-Since and re-pull every document. Needed after a
+   * mapping change (e.g. how tracking resolves) so rows Xero has not touched
+   * since the last run are still re-written with the corrected values.
+   */
+  full?: boolean
+}
+
 /**
- * Run a full incremental sync. Never throws — any failure marks the
- * sync_runs row status 'error' with the message and flags the connection.
+ * Run an incremental sync (or a full re-pull with `full: true`). Never
+ * throws — any failure marks the sync_runs row status 'error' with the
+ * message and flags the connection.
  */
 export async function runSync(
   trigger: SyncTrigger,
   triggeredBy: string | null,
+  options: RunSyncOptions = {},
 ): Promise<SyncResult> {
   const svc = serviceClient()
   const errors: string[] = []
@@ -964,16 +1054,16 @@ export async function runSync(
     }
     runId = (run as { id: string }).id
 
-    const modifiedSince = await lastSuccessfulRunStart(svc)
-    const categoryPosition = new Map<string, 1 | 2>()
+    const modifiedSince = options.full ? undefined : await lastSuccessfulRunStart(svc)
+    const tracking = emptyTrackingIndex()
 
     // Strictly sequential — Xero allows 60 calls/minute per connection.
     total += await syncAccounts(svc, modifiedSince)
     total += await syncContacts(svc, modifiedSince)
-    total += await syncTrackingCategories(svc, categoryPosition)
-    total += await syncInvoices(svc, categoryPosition, errors, modifiedSince)
-    total += await syncBankTransactions(svc, categoryPosition, errors, modifiedSince)
-    total += await syncCreditNotes(svc, categoryPosition, errors, modifiedSince)
+    total += await syncTrackingCategories(svc, tracking)
+    total += await syncInvoices(svc, tracking, errors, modifiedSince)
+    total += await syncBankTransactions(svc, tracking, errors, modifiedSince)
+    total += await syncCreditNotes(svc, tracking, errors, modifiedSince)
     total += await autoCreateFunds(svc)
     await runWarningEngine(svc)
 

@@ -73,8 +73,13 @@ export default function DashboardPage() {
   const funds = balances.data ?? []
   const total = funds.reduce((s, f) => s + f.balance, 0)
   const ytdNet = funds.reduce((s, f) => s + f.ytd_income - f.ytd_expenditure, 0)
-  const restricted = funds.filter((f) => f.fund_type === 'restricted')
-  const unrestricted = funds.filter((f) => f.fund_type !== 'restricted')
+  // Endowment capital is not free reserves — it sits with restricted here.
+  const restricted = funds.filter(
+    (f) => f.fund_type === 'restricted' || f.fund_type === 'endowment',
+  )
+  const unrestricted = funds.filter(
+    (f) => f.fund_type !== 'restricted' && f.fund_type !== 'endowment',
+  )
   const restrictedTotal = restricted.reduce((s, f) => s + f.balance, 0)
   const unrestrictedTotal = unrestricted.reduce((s, f) => s + f.balance, 0)
   const openWarningCount = funds.reduce((s, f) => s + f.open_warning_count, 0)
@@ -145,7 +150,7 @@ export default function DashboardPage() {
             <StatTile
               label="Restricted"
               value={formatMoney(restrictedTotal, { whole: true })}
-              sub={restricted.length === 1 ? '1 fund' : `${restricted.length} funds`}
+              sub={`incl. endowment · ${restricted.length === 1 ? '1 fund' : `${restricted.length} funds`}`}
             />
             <StatTile
               label="Unrestricted"

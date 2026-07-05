@@ -42,6 +42,7 @@ type TypeFilter = 'all' | FundType
 const TYPE_FILTERS: Array<{ value: TypeFilter; label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'restricted', label: 'Restricted' },
+  { value: 'endowment', label: 'Endowment' },
   { value: 'designated', label: 'Designated' },
   { value: 'general', label: 'General' },
   { value: 'dormant', label: 'Dormant' },
@@ -50,6 +51,7 @@ const TYPE_FILTERS: Array<{ value: TypeFilter; label: string }> = [
 const TYPE_LABELS: Record<FundType, string> = {
   restricted: 'Restricted',
   designated: 'Designated',
+  endowment: 'Endowment',
   general: 'General',
   dormant: 'Dormant',
 }

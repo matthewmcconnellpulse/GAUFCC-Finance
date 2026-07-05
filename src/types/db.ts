@@ -18,7 +18,7 @@ export type Role =
 
 export type Organisation = 'pulse' | 'gaufcc'
 
-export type FundType = 'restricted' | 'designated' | 'general' | 'dormant'
+export type FundType = 'restricted' | 'designated' | 'endowment' | 'general' | 'dormant'
 
 export type ClaimStatus =
   | 'draft'

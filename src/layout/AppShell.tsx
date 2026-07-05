@@ -11,18 +11,43 @@ interface NavItem {
   show: boolean
 }
 
-function useNavItems(): NavItem[] {
+interface NavSection {
+  /** null = no heading — the primary run of items */
+  label: string | null
+  items: NavItem[]
+}
+
+function useNavSections(): NavSection[] {
   const p = usePermissions()
+  const seesFinancials = p.isPulse || p.isCeo || p.isTrustee
   return [
-    { to: '/', label: 'Dashboard', show: true },
-    { to: '/funds', label: 'Funds', show: p.isPulse || p.isCeo || p.isTrustee },
-    { to: '/reports', label: 'Reports', show: p.canSeeReports },
-    { to: '/expenses', label: 'Expenses', show: true },
-    { to: '/people', label: 'People', show: p.isAdmin || p.isPayroll },
-    { to: '/imports', label: 'Imports', show: p.isPulse },
-    { to: '/vat', label: 'VAT', show: p.isPulse || p.isCeo || p.isTrustee },
-    { to: '/projects', label: 'Projects', show: p.isPulse || p.isCeo },
-    { to: '/settings', label: 'Settings', show: p.isAdmin || p.isCeo },
+    {
+      label: null,
+      items: [
+        { to: '/', label: 'Dashboard', show: true },
+        { to: '/funds', label: 'Funds', show: p.isPulse || p.isCeo || p.isTrustee },
+        { to: '/reports', label: 'Reports', show: p.canSeeReports },
+      ],
+    },
+    {
+      label: 'Financials',
+      items: [
+        { to: '/financials/profit-loss', label: 'Profit & Loss', show: seesFinancials },
+        { to: '/financials/balance-sheet', label: 'Balance Sheet', show: seesFinancials },
+        { to: '/financials/transactions', label: 'Transactions', show: seesFinancials },
+      ],
+    },
+    {
+      label: null,
+      items: [
+        { to: '/expenses', label: 'Expenses', show: true },
+        { to: '/people', label: 'People', show: p.isAdmin || p.isPayroll },
+        { to: '/imports', label: 'Imports', show: p.isPulse },
+        { to: '/vat', label: 'VAT', show: p.isPulse || p.isCeo || p.isTrustee },
+        { to: '/projects', label: 'Projects', show: p.isPulse || p.isCeo },
+        { to: '/settings', label: 'Settings', show: p.isAdmin || p.isCeo },
+      ],
+    },
   ]
 }
 
@@ -59,28 +84,41 @@ function SyncButton() {
 export default function AppShell() {
   const { profile, signOut } = useAuth()
   const navigate = useNavigate()
-  const items = useNavItems().filter((i) => i.show)
+  const sections = useNavSections()
+    .map((s) => ({ ...s, items: s.items.filter((i) => i.show) }))
+    .filter((s) => s.items.length > 0)
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const nav = (
-    <nav className="flex-1 px-3 space-y-0.5">
-      {items.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.to === '/'}
-          onClick={() => setMobileOpen(false)}
-          className={({ isActive }) =>
-            cx(
-              'block rounded-control px-3.5 py-2 text-[13px] transition-colors',
-              isActive
-                ? 'bg-white/10 text-white font-medium'
-                : 'text-white/65 hover:text-white hover:bg-white/5',
-            )
-          }
-        >
-          {item.label}
-        </NavLink>
+    <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto">
+      {sections.map((section, si) => (
+        <div key={section.label ?? si}>
+          {section.label ? (
+            <div className="px-3.5 pt-4 pb-1 text-[9.5px] font-medium uppercase tracking-[.16em] text-white/40">
+              {section.label}
+            </div>
+          ) : si > 0 ? (
+            <div className="h-3" aria-hidden />
+          ) : null}
+          {section.items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              onClick={() => setMobileOpen(false)}
+              className={({ isActive }) =>
+                cx(
+                  'block rounded-control px-3.5 py-2 text-[13px] transition-colors',
+                  isActive
+                    ? 'bg-white/10 text-white font-medium'
+                    : 'text-white/65 hover:text-white hover:bg-white/5',
+                )
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
       ))}
     </nav>
   )

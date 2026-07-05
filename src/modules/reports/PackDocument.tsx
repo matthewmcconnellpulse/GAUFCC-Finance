@@ -86,6 +86,7 @@ function expFig(v: number): string {
 const CHIP_STYLES: Record<FundType, { background: string; color: string }> = {
   restricted: { background: 'rgba(33,25,81,.09)', color: '#211951' },
   designated: { background: 'rgba(22,182,206,.13)', color: '#0e7c8c' },
+  endowment: { background: 'rgba(151,71,255,.12)', color: '#6b2fbf' },
   general: { background: 'rgba(4,184,148,.13)', color: '#036c57' },
   dormant: { background: '#ebe9e3', color: '#807c70' },
 }
@@ -93,6 +94,7 @@ const CHIP_STYLES: Record<FundType, { background: string; color: string }> = {
 const GROUP_HEAD_COLOURS: Record<FundType, string> = {
   restricted: '#211951',
   designated: '#0e7c8c',
+  endowment: '#6b2fbf',
   general: '#036c57',
   dormant: '#807c70',
 }

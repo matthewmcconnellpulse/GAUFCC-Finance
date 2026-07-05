@@ -102,6 +102,7 @@ export function SectionLabel({ children }: { children: ReactNode }) {
 const fundTypeChipStyles: Record<FundType, { bg: string; fg: string; label: string }> = {
   restricted: { bg: 'rgba(33,25,81,.09)', fg: '#211951', label: 'Restricted' },
   designated: { bg: 'rgba(22,182,206,.13)', fg: '#0e7c8c', label: 'Designated' },
+  endowment: { bg: 'rgba(151,71,255,.12)', fg: '#6b2fbf', label: 'Endowment' },
   general: { bg: 'rgba(4,184,148,.13)', fg: '#036c57', label: 'General' },
   dormant: { bg: '#ebe9e3', fg: '#807c70', label: 'Dormant' },
 }

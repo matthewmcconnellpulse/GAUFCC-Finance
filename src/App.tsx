@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from 'react'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from '@/auth/AuthProvider'
 import { SyncProvider } from '@/sync/SyncProvider'
 import RequireAuth from '@/auth/RequireAuth'
@@ -23,6 +23,13 @@ const PeoplePage = lazy(() => import('@/modules/people/PeoplePage'))
 const PersonDetailPage = lazy(() => import('@/modules/people/PersonDetailPage'))
 const OnboardingFormPage = lazy(() => import('@/modules/people/OnboardingFormPage'))
 const ImportsPage = lazy(() => import('@/modules/imports/ImportsPage'))
+const TransactionsPage = lazy(() => import('@/modules/financials/TransactionsPage'))
+const ProfitLossPage = lazy(() =>
+  import('@/modules/financials/ReportPage').then((m) => ({ default: m.ProfitLossPage })),
+)
+const BalanceSheetPage = lazy(() =>
+  import('@/modules/financials/ReportPage').then((m) => ({ default: m.BalanceSheetPage })),
+)
 const VatPage = lazy(() => import('@/modules/vat/VatPage'))
 const ProjectsPage = lazy(() => import('@/modules/projects/ProjectsPage'))
 const SettingsPage = lazy(() => import('@/modules/settings/SettingsPage'))
@@ -68,6 +75,10 @@ export default function App() {
               <Route path="funds/integrity" element={<Page><IntegrityPage /></Page>} />
               <Route path="funds/:id" element={<Page><FundDetailPage /></Page>} />
               <Route path="reports/*" element={<Page><ReportsPage /></Page>} />
+              <Route path="financials" element={<Navigate to="/financials/profit-loss" replace />} />
+              <Route path="financials/profit-loss" element={<Page><ProfitLossPage /></Page>} />
+              <Route path="financials/balance-sheet" element={<Page><BalanceSheetPage /></Page>} />
+              <Route path="financials/transactions" element={<Page><TransactionsPage /></Page>} />
               <Route path="expenses" element={<Page><ExpensesPage /></Page>} />
               <Route path="expenses/approvals" element={<Page><ApprovalQueuePage /></Page>} />
               <Route path="expenses/:id" element={<Page><ClaimDetailPage /></Page>} />

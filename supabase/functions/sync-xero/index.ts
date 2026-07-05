@@ -74,6 +74,15 @@ Deno.serve(async (req) => {
     return errorResponse('Unauthorised', 401)
   }
 
-  waitUntil(runSync('cron', null))
+  // { full: true } forces a complete re-pull (ignores If-Modified-Since).
+  let full = false
+  try {
+    const body = (await req.json()) as { full?: boolean } | null
+    full = body?.full === true
+  } catch {
+    // nightly cron posts {"trigger":"cron"} — treat any parse failure as incremental
+  }
+
+  waitUntil(runSync('cron', null, { full }))
   return json({ started: true }, 202)
 })

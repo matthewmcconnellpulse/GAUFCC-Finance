@@ -52,6 +52,16 @@ Deno.serve(async (req) => {
     return json({ started: false, debounced: true })
   }
 
-  waitUntil(runSync('manual', caller.userId))
+  // { full: true } forces a complete re-pull (ignores If-Modified-Since) —
+  // used after mapping changes so untouched documents are re-written too.
+  let full = false
+  try {
+    const body = (await req.json()) as { full?: boolean } | null
+    full = body?.full === true
+  } catch {
+    // no body — a plain refresh
+  }
+
+  waitUntil(runSync('manual', caller.userId, { full }))
   return json({ started: true }, 202)
 })
