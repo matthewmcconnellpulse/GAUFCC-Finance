@@ -216,6 +216,19 @@ export async function countSubmittedClaims(): Promise<number> {
   return count ?? 0
 }
 
+/** Active users a Pulse admin/bookkeeper can raise a claim for. */
+export async function fetchActiveProfiles(): Promise<
+  Array<{ id: string; full_name: string; role: string }>
+> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, full_name, role')
+    .eq('active', true)
+    .order('full_name', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as Array<{ id: string; full_name: string; role: string }>
+}
+
 export async function createClaim(submitterId: string): Promise<ExpenseClaim> {
   const { data, error } = await supabase
     .from('expense_claims')

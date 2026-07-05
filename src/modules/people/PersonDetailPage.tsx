@@ -12,6 +12,8 @@ import {
   Card,
   EmptyState,
   ErrorNotice,
+  Field,
+  Input,
   LoadingRows,
   PageHeader,
   SectionLabel,
@@ -22,13 +24,16 @@ import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import type { OnboardingStatus, OnboardingSubmission, Person } from '@/types/db'
 import { OnboardingStatusChip, PersonTypeChip } from './components'
 import {
+  createPersonLogin,
   docsFromSubmissions,
   fetchPerson,
   fetchSubmissions,
   revealBankDetails,
   setOnboardingStatus,
   signedDocUrl,
+  updatePerson,
   type PersonBankDetails,
+  type PersonPatch,
 } from './lib'
 
 // ── Small local pieces ───────────────────────────────────────────────────────
@@ -297,6 +302,7 @@ function SubmissionsCard({ submissions }: { submissions: OnboardingSubmission[] 
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { isAdmin, isPayroll } = usePermissions()
+  const [editing, setEditing] = useState(false)
 
   const person = useSupabaseQuery(() => fetchPerson(id ?? ''), [id])
   const submissions = useSupabaseQuery(() => fetchSubmissions(id ?? ''), [id])
@@ -372,39 +378,58 @@ export default function PersonDetailPage() {
             {p.email ? <span>{p.email}</span> : null}
           </span>
         }
+        actions={
+          editing ? null : (
+            <Button variant="ghost" onClick={() => setEditing(true)}>
+              Edit details
+            </Button>
+          )
+        }
       />
 
       <div className="grid lg:grid-cols-3 gap-4 items-start">
         {/* Left — the record */}
         <div className="lg:col-span-2 space-y-4">
-          <CardSection title="Personal details">
-            <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
-              <DetailRow label="Full name" value={`${p.first_name} ${p.last_name}`} />
-              <DetailRow label="Date of birth" value={formatDate(p.date_of_birth)} mono />
-              <DetailRow label="Email" value={p.email} />
-              <DetailRow label="Phone" value={p.phone} mono />
-              <div className="sm:col-span-2">
-                <DetailRow label="Address" value={p.address} />
-              </div>
-            </dl>
-          </CardSection>
+          {editing ? (
+            <EditPersonForm
+              person={p}
+              onDone={(changed) => {
+                setEditing(false)
+                if (changed) person.refetch()
+              }}
+            />
+          ) : (
+            <>
+              <CardSection title="Personal details">
+                <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
+                  <DetailRow label="Full name" value={`${p.first_name} ${p.last_name}`} />
+                  <DetailRow label="Date of birth" value={formatDate(p.date_of_birth)} mono />
+                  <DetailRow label="Email" value={p.email} />
+                  <DetailRow label="Phone" value={p.phone} mono />
+                  <div className="sm:col-span-2">
+                    <DetailRow label="Address" value={p.address} />
+                  </div>
+                </dl>
+              </CardSection>
 
-          <CardSection title={p.type === 'employee' ? 'Role' : 'Volunteering'}>
-            <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
-              <DetailRow
-                label={p.type === 'employee' ? 'Job title' : 'Capacity'}
-                value={p.type === 'employee' ? p.role_title : p.volunteer_capacity}
-              />
-              <DetailRow label="Start date" value={formatDate(p.start_date)} mono />
-            </dl>
-          </CardSection>
+              <CardSection title={p.type === 'employee' ? 'Role' : 'Volunteering'}>
+                <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
+                  <DetailRow
+                    label={p.type === 'employee' ? 'Job title' : 'Capacity'}
+                    value={p.type === 'employee' ? p.role_title : p.volunteer_capacity}
+                  />
+                  <DetailRow label="Start date" value={formatDate(p.start_date)} mono />
+                </dl>
+              </CardSection>
 
-          <CardSection title="Emergency contact">
-            <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
-              <DetailRow label="Name" value={p.emergency_contact_name} />
-              <DetailRow label="Phone" value={p.emergency_contact_phone} mono />
-            </dl>
-          </CardSection>
+              <CardSection title="Emergency contact">
+                <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3">
+                  <DetailRow label="Name" value={p.emergency_contact_name} />
+                  <DetailRow label="Phone" value={p.emergency_contact_phone} mono />
+                </dl>
+              </CardSection>
+            </>
+          )}
 
           {submissions.error ? (
             <ErrorNotice message={`Submissions could not be loaded — ${submissions.error}`} />
@@ -419,6 +444,7 @@ export default function PersonDetailPage() {
 
         {/* Right — actions and sensitive material */}
         <div className="space-y-4">
+          <LoginCard person={p} isAdmin={isAdmin} onChanged={person.refetch} />
           <StatusCard person={p} onChanged={person.refetch} />
           {p.type === 'employee' ? (
             <BankCard person={p} />
@@ -439,5 +465,232 @@ export default function PersonDetailPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+// ── Edit details (payroll + admin; RLS people_update) ────────────────────────
+
+function EditPersonForm({
+  person,
+  onDone,
+}: {
+  person: Person
+  onDone: (changed: boolean) => void
+}) {
+  const [form, setForm] = useState<PersonPatch>({
+    first_name: person.first_name,
+    last_name: person.last_name,
+    email: person.email,
+    phone: person.phone,
+    address: person.address,
+    date_of_birth: person.date_of_birth,
+    role_title: person.role_title,
+    volunteer_capacity: person.volunteer_capacity,
+    start_date: person.start_date,
+    emergency_contact_name: person.emergency_contact_name,
+    emergency_contact_phone: person.emergency_contact_phone,
+  })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const set = (patch: PersonPatch) => setForm((f) => ({ ...f, ...patch }))
+  const text = (value: string): string | null => (value.trim() === '' ? null : value)
+
+  async function save() {
+    if (!form.first_name?.trim() || !form.last_name?.trim()) {
+      setError('First and last name are required')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await updatePerson(person.id, form)
+      onDone(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The details could not be saved')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <CardSection title="Edit details">
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="First name">
+          <Input
+            value={form.first_name ?? ''}
+            onChange={(e) => set({ first_name: e.target.value })}
+          />
+        </Field>
+        <Field label="Last name">
+          <Input value={form.last_name ?? ''} onChange={(e) => set({ last_name: e.target.value })} />
+        </Field>
+        <Field label="Email">
+          <Input
+            type="email"
+            value={form.email ?? ''}
+            onChange={(e) => set({ email: text(e.target.value) })}
+          />
+        </Field>
+        <Field label="Phone">
+          <Input
+            value={form.phone ?? ''}
+            onChange={(e) => set({ phone: text(e.target.value) })}
+            className="font-mono"
+          />
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="Address">
+            <Input
+              value={form.address ?? ''}
+              onChange={(e) => set({ address: text(e.target.value) })}
+            />
+          </Field>
+        </div>
+        <Field label="Date of birth">
+          <Input
+            type="date"
+            value={form.date_of_birth ?? ''}
+            onChange={(e) => set({ date_of_birth: text(e.target.value) })}
+            className="font-mono"
+          />
+        </Field>
+        <Field label="Start date">
+          <Input
+            type="date"
+            value={form.start_date ?? ''}
+            onChange={(e) => set({ start_date: text(e.target.value) })}
+            className="font-mono"
+          />
+        </Field>
+        {person.type === 'employee' ? (
+          <Field label="Job title">
+            <Input
+              value={form.role_title ?? ''}
+              onChange={(e) => set({ role_title: text(e.target.value) })}
+            />
+          </Field>
+        ) : (
+          <Field label="Volunteer capacity">
+            <Input
+              value={form.volunteer_capacity ?? ''}
+              onChange={(e) => set({ volunteer_capacity: text(e.target.value) })}
+            />
+          </Field>
+        )}
+        <Field label="Emergency contact name">
+          <Input
+            value={form.emergency_contact_name ?? ''}
+            onChange={(e) => set({ emergency_contact_name: text(e.target.value) })}
+          />
+        </Field>
+        <Field label="Emergency contact phone">
+          <Input
+            value={form.emergency_contact_phone ?? ''}
+            onChange={(e) => set({ emergency_contact_phone: text(e.target.value) })}
+            className="font-mono"
+          />
+        </Field>
+      </div>
+      {error ? (
+        <div className="mt-3">
+          <ErrorNotice message={error} />
+        </div>
+      ) : null}
+      <div className="flex items-center justify-end gap-2 mt-4">
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDone(false)}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="sm" disabled={busy} onClick={() => void save()}>
+          {busy ? 'Saving…' : 'Save details'}
+        </Button>
+      </div>
+      <p className="text-[10.5px] text-stone-400 mt-3">
+        Bank details and NI numbers are updated through onboarding, never here. Changes are
+        audit-logged.
+      </p>
+    </CardSection>
+  )
+}
+
+// ── Login (expenses access) ──────────────────────────────────────────────────
+
+function LoginCard({
+  person,
+  isAdmin,
+  onChanged,
+}: {
+  person: Person
+  isAdmin: boolean
+  onChanged: () => void
+}) {
+  const [email, setEmail] = useState(person.email ?? '')
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function invite() {
+    setBusy(true)
+    setError(null)
+    try {
+      await createPersonLogin(person, email.trim().toLowerCase())
+      setSent(true)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The invite could not be sent')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <CardSection title="Expenses login">
+      {person.profile_id ? (
+        <>
+          <p className="text-[12px] text-stone-700 leading-relaxed">
+            Login active — they sign in with their email, see their own expense history and can
+            submit claims themselves.
+          </p>
+          <p className="text-[10.5px] text-stone-400 mt-2">
+            Forgotten password? They can reset it from the sign-in screen.
+          </p>
+        </>
+      ) : sent ? (
+        <p className="text-[12px] text-mint-900 leading-relaxed">
+          Invite sent — they choose a password from the email link, and their expense history is
+          already waiting for them.
+        </p>
+      ) : isAdmin ? (
+        <>
+          <p className="text-[12px] text-stone-500 leading-relaxed mb-3">
+            No login yet. Create one so they can see their expense history and submit claims —
+            they set their own password from the invite email.
+          </p>
+          <Field label="Invite email">
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.org"
+            />
+          </Field>
+          <Button
+            className="w-full mt-3"
+            disabled={busy || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())}
+            onClick={() => void invite()}
+          >
+            {busy ? 'Sending…' : 'Create login & send invite'}
+          </Button>
+        </>
+      ) : (
+        <p className="text-[12px] text-stone-500 leading-relaxed">
+          No login yet — the Pulse admin can create one from this page.
+        </p>
+      )}
+      {error ? (
+        <div className="mt-3">
+          <ErrorNotice message={error} />
+        </div>
+      ) : null}
+    </CardSection>
   )
 }

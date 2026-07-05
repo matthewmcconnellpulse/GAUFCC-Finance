@@ -2,10 +2,14 @@
  * invite-user — send a Supabase invite email and set up the profile.
  *
  * JWT-verified; pulse_admin ONLY. Body { email, full_name, role,
- * organisation }. Sends the invite via auth.admin.inviteUserByEmail with a
- * redirect to <origin or SITE_URL>/reset-password, then upserts the profiles
- * row with the requested role/organisation (the signup trigger will have
- * created it with defaults), and audit-logs 'user_invited'.
+ * organisation, person_id? }. Sends the invite via
+ * auth.admin.inviteUserByEmail with a redirect to
+ * <origin or SITE_URL>/reset-password, then upserts the profiles row with the
+ * requested role/organisation (the signup trigger will have created it with
+ * defaults), and audit-logs 'user_invited'.
+ *
+ * person_id links an employee/volunteer record: people.profile_id is set to
+ * the new user so their expense history and onboarding data follow the login.
  *
  * Returns { ok: true }.
  */
@@ -39,12 +43,19 @@ Deno.serve(async (req) => {
   }
 
   const body = (await req.json().catch(() => null)) as
-    | { email?: unknown; full_name?: unknown; role?: unknown; organisation?: unknown }
+    | {
+        email?: unknown
+        full_name?: unknown
+        role?: unknown
+        organisation?: unknown
+        person_id?: unknown
+      }
     | null
   const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : ''
   const fullName = typeof body?.full_name === 'string' ? body.full_name.trim() : ''
   const role = body?.role
   const organisation = body?.organisation
+  const personId = typeof body?.person_id === 'string' ? body.person_id : null
 
   if (!isEmail(email)) return errorResponse('A valid email address is required')
   if (!fullName || fullName.length > 200) return errorResponse('full_name is required')
@@ -95,12 +106,26 @@ Deno.serve(async (req) => {
     )
   }
 
+  // Link the employee/volunteer record so their history follows the login.
+  if (personId) {
+    const { error: personError } = await svc
+      .from('people')
+      .update({ profile_id: userId, email })
+      .eq('id', personId)
+    if (personError) {
+      return errorResponse(
+        `The invite was sent but the person record could not be linked: ${personError.message}`,
+        500,
+      )
+    }
+  }
+
   await auditLog(svc, {
     actor_id: caller.userId,
     action: 'user_invited',
     entity: 'profiles',
     entity_id: userId,
-    after: { email, full_name: fullName, role, organisation },
+    after: { email, full_name: fullName, role, organisation, person_id: personId },
     ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
   })
 

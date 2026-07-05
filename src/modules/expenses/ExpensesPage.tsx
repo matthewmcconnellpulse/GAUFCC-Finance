@@ -32,6 +32,7 @@ import {
 import {
   countSubmittedClaims,
   createClaim,
+  fetchActiveProfiles,
   fetchClaims,
   periodOptions,
   type ClaimWithSubmitter,
@@ -152,10 +153,11 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
 
 function AllClaimsView() {
   const navigate = useNavigate()
-  const { isCeo } = usePermissions()
+  const { isCeo, isAdmin, isBookkeeper } = usePermissions()
   const deadline = useDeadline()
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [periodFilter, setPeriodFilter] = useState<string>('all')
+  const canRaiseOnBehalf = isAdmin || isBookkeeper
 
   const claims = useSupabaseQuery(() => fetchClaims(), [])
   const queueCount = useSupabaseQuery(countSubmittedClaims, [])
@@ -178,12 +180,15 @@ function AllClaimsView() {
         title="Expenses"
         subtitle="Every claim across the Assembly — filter by status and period"
         actions={
-          <Button variant={isCeo ? 'primary' : 'ghost'} onClick={() => navigate('/expenses/approvals')}>
-            Approval queue
-            {count > 0 ? (
-              <span className="font-mono text-[10px] bg-mint text-indigo rounded-full px-1.5 py-px">{count}</span>
-            ) : null}
-          </Button>
+          <>
+            {canRaiseOnBehalf ? <NewClaimFor /> : null}
+            <Button variant={isCeo ? 'primary' : 'ghost'} onClick={() => navigate('/expenses/approvals')}>
+              Approval queue
+              {count > 0 ? (
+                <span className="font-mono text-[10px] bg-mint text-indigo rounded-full px-1.5 py-px">{count}</span>
+              ) : null}
+            </Button>
+          </>
         }
       />
       <DeadlineBanner mode="approve" deadline={deadline} />
@@ -280,5 +285,61 @@ function ClaimRow({ claim, onOpen }: { claim: ClaimWithSubmitter; onOpen: () => 
         <ClaimStatusChip status={claim.status} />
       </td>
     </tr>
+  )
+}
+
+/**
+ * "New claim for…" — Pulse raises a draft claim on someone's behalf, so paper
+ * receipts handed to the office land in the same central place. People need a
+ * login first (People → their record → Create login): claims belong to users.
+ */
+function NewClaimFor() {
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const people = useSupabaseQuery(() => (open ? fetchActiveProfiles() : Promise.resolve([])), [open])
+
+  const start = async (profileId: string) => {
+    if (!profileId || starting) return
+    setStarting(true)
+    setError(null)
+    try {
+      const claim = await createClaim(profileId)
+      navigate(`/expenses/${claim.id}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start the claim')
+      setStarting(false)
+    }
+  }
+
+  return (
+    <span className="relative inline-flex flex-col items-end gap-1">
+      {open ? (
+        <Select
+          autoFocus
+          defaultValue=""
+          disabled={starting}
+          onChange={(e) => void start(e.target.value)}
+          onBlur={() => setOpen(false)}
+          className="!w-auto py-1.5 text-[12px]"
+          aria-label="Raise a claim on behalf of"
+        >
+          <option value="" disabled>
+            {starting ? 'Starting…' : 'Claim on behalf of…'}
+          </option>
+          {(people.data ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.full_name}
+            </option>
+          ))}
+        </Select>
+      ) : (
+        <Button variant="ghost" onClick={() => setOpen(true)}>
+          New claim for…
+        </Button>
+      )}
+      {error ? <span className="text-[10.5px] text-danger-ink">{error}</span> : null}
+    </span>
   )
 }

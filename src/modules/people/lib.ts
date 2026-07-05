@@ -13,7 +13,7 @@
  *  · rpc get_person_bank_details(p_person_id uuid) — payroll/admin only,
  *      every call is audit-logged server-side.
  */
-import { supabase } from '@/lib/supabase'
+import { invokeFunction, supabase } from '@/lib/supabase'
 import type { OnboardingStatus, OnboardingSubmission, Person, PersonType } from '@/types/db'
 
 // ── Pipeline stages ──────────────────────────────────────────────────────────
@@ -57,6 +57,45 @@ export async function fetchPerson(id: string): Promise<Person | null> {
   const { data, error } = await supabase.from('people').select('*').eq('id', id).maybeSingle()
   if (error) throw new Error(error.message)
   return (data as Person | null) ?? null
+}
+
+/** Editable person fields — payroll + admin (RLS people_update). */
+export type PersonPatch = Partial<
+  Pick<
+    Person,
+    | 'first_name'
+    | 'last_name'
+    | 'email'
+    | 'phone'
+    | 'address'
+    | 'date_of_birth'
+    | 'role_title'
+    | 'volunteer_capacity'
+    | 'start_date'
+    | 'emergency_contact_name'
+    | 'emergency_contact_phone'
+  >
+>
+
+export async function updatePerson(id: string, patch: PersonPatch): Promise<void> {
+  const { error } = await supabase.from('people').update(patch).eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Create a login for an employee/volunteer: sends a Supabase invite email
+ * (they choose their password from the link), creates a submitter profile and
+ * links people.profile_id so their expense history follows them.
+ * Pulse admin only (the invite-user function enforces it).
+ */
+export async function createPersonLogin(person: Person, email: string): Promise<void> {
+  await invokeFunction('invite-user', {
+    email,
+    full_name: `${person.first_name} ${person.last_name}`.trim(),
+    role: 'submitter',
+    organisation: 'gaufcc',
+    person_id: person.id,
+  })
 }
 
 export async function fetchSubmissions(personId: string): Promise<OnboardingSubmission[]> {

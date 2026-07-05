@@ -28,6 +28,19 @@ export async function invokeFunction<T = unknown>(
   body?: Record<string, unknown>,
 ): Promise<T> {
   const { data, error } = await supabase.functions.invoke<T>(name, { body })
-  if (error) throw error
+  if (error) {
+    // FunctionsHttpError says only "non-2xx status code" — the function's real
+    // explanation is in the response body.
+    const context = (error as { context?: Response }).context
+    if (context) {
+      try {
+        const payload = (await context.json()) as { error?: string }
+        if (payload?.error) throw new Error(payload.error)
+      } catch (e) {
+        if (e instanceof Error && !e.message.includes('JSON')) throw e
+      }
+    }
+    throw new Error(error.message)
+  }
   return data as T
 }

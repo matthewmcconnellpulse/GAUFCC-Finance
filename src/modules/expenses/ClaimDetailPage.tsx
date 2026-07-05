@@ -87,7 +87,12 @@ export default function ClaimDetailPage() {
 
   const isOwner = claim != null && profile != null && claim.submitter_id === profile.id
   const isDraft = claim?.status === 'draft'
-  const canEditAll = isOwner && isDraft
+  // Pulse can prepare a claim on someone's behalf (RLS + guard allow it);
+  // the bookkeeper builds the draft but only the owner or the admin submits.
+  const canEditAll = (isOwner || perms.isAdmin || perms.isBookkeeper) && isDraft
+  const onBehalf = canEditAll && !isOwner
+  const canSubmit = isDraft && (isOwner || perms.isAdmin)
+  const canDeleteDraft = isDraft && (isOwner || perms.isAdmin)
   const canCode =
     (perms.isBookkeeper || perms.isAdmin) &&
     (claim?.status === 'submitted' || claim?.status === 'approved')
@@ -175,7 +180,7 @@ export default function ClaimDetailPage() {
       const setJob = (patch: Partial<UploadJob>) =>
         setJobs((js) => js.map((j) => (j.id === jobId ? { ...j, ...patch } : j)))
       try {
-        const path = receiptPath(profile.id, claim.id, file.name)
+        const path = receiptPath(claim.submitter_id, claim.id, file.name)
         await uploadReceipt(path, file)
         setJob({ status: 'reading' })
         let line: ExpenseLine
@@ -310,11 +315,14 @@ export default function ClaimDetailPage() {
           <span className="inline-flex items-center gap-2 flex-wrap">
             {claim.submitter?.full_name ?? 'Your claim'} · {formatPeriod(claim.period)}
             <ClaimStatusChip status={claim.status} />
+            {onBehalf ? (
+              <span className="text-[11px] text-stone-500">entered by Pulse on their behalf</span>
+            ) : null}
           </span>
         }
         actions={
           <>
-            {canEditAll ? (
+            {canDeleteDraft ? (
               <Button variant="quiet" onClick={() => void removeDraft()}>
                 Delete draft
               </Button>
@@ -436,8 +444,8 @@ export default function ClaimDetailPage() {
             </div>
           ) : null}
 
-          {/* Submit — draft owner only */}
-          {canEditAll ? (
+          {/* Submit — the owner or the Pulse admin */}
+          {canSubmit ? (
             <div className="space-y-3">
               {deadline ? (
                 deadline.rolled ? (
@@ -469,6 +477,10 @@ export default function ClaimDetailPage() {
                 ) : null}
               </div>
             </div>
+          ) : canEditAll ? (
+            <p className="text-[11.5px] text-stone-500">
+              Bookkeepers prepare claims — the claimant or the Pulse admin submits it for approval.
+            </p>
           ) : null}
         </div>
 
