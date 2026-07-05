@@ -5,6 +5,7 @@
  * straight from Xero via the xero-report edge function).
  */
 
+import type { PageSize } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import type { Fund, XeroAccount, XeroTransaction } from '@/types/db'
 
@@ -128,8 +129,6 @@ export function endOfLastMonth(): string {
 
 // ── Account transactions (mirror) ────────────────────────────────────────────
 
-export const TXN_PAGE_SIZE = 50
-
 export interface TransactionFilters {
   search: string
   accountCode: string // '' = all
@@ -153,28 +152,50 @@ export interface TransactionPage {
   total: number
 }
 
+// PostgREST serves at most 1,000 rows per request — "All" walks the result
+// in chunks. The cap is a runaway guard, far above the mirror's row count.
+const ALL_CHUNK = 1000
+const ALL_CAP = 25000
+
 export async function fetchTransactions(
   filters: TransactionFilters,
   page: number,
+  pageSize: PageSize,
 ): Promise<TransactionPage> {
-  let query = supabase
-    .from('xero_transactions')
-    .select('*', { count: 'exact' })
-    .order('date', { ascending: false })
-    .order('created_at', { ascending: false })
+  const buildQuery = () => {
+    let query = supabase
+      .from('xero_transactions')
+      .select('*', { count: 'exact' })
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false })
 
-  if (filters.accountCode) query = query.eq('account_code', filters.accountCode)
-  if (filters.sourceType) query = query.eq('source_type', filters.sourceType)
-  if (filters.fundOptionId) query = query.eq('tracking_option_1_id', filters.fundOptionId)
-  if (filters.dateFrom) query = query.gte('date', filters.dateFrom)
-  if (filters.dateTo) query = query.lte('date', filters.dateTo)
-  if (filters.search.trim()) {
-    const term = filters.search.trim().replace(/[%_,()]/g, ' ')
-    query = query.or(`description.ilike.%${term}%,contact_name.ilike.%${term}%`)
+    if (filters.accountCode) query = query.eq('account_code', filters.accountCode)
+    if (filters.sourceType) query = query.eq('source_type', filters.sourceType)
+    if (filters.fundOptionId) query = query.eq('tracking_option_1_id', filters.fundOptionId)
+    if (filters.dateFrom) query = query.gte('date', filters.dateFrom)
+    if (filters.dateTo) query = query.lte('date', filters.dateTo)
+    if (filters.search.trim()) {
+      const term = filters.search.trim().replace(/[%_,()]/g, ' ')
+      query = query.or(`description.ilike.%${term}%,contact_name.ilike.%${term}%`)
+    }
+    return query
   }
 
-  const from = page * TXN_PAGE_SIZE
-  const { data, error, count } = await query.range(from, from + TXN_PAGE_SIZE - 1)
+  if (pageSize === 'all') {
+    const rows: XeroTransaction[] = []
+    let total = 0
+    for (let offset = 0; offset < ALL_CAP; offset += ALL_CHUNK) {
+      const { data, error, count } = await buildQuery().range(offset, offset + ALL_CHUNK - 1)
+      if (error) throw new Error(error.message)
+      total = count ?? total
+      rows.push(...((data ?? []) as XeroTransaction[]))
+      if (!data || data.length < ALL_CHUNK || rows.length >= total) break
+    }
+    return { rows, total }
+  }
+
+  const from = page * pageSize
+  const { data, error, count } = await buildQuery().range(from, from + pageSize - 1)
   if (error) throw new Error(error.message)
   return { rows: (data ?? []) as XeroTransaction[], total: count ?? 0 }
 }

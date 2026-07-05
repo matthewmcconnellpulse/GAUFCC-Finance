@@ -75,9 +75,9 @@ export interface MovementRow {
   fund_name: string | null
 }
 
-// ── Periods (GAUFCC financial year starts 1 April, UK charity convention) ────
+// ── Periods (GAUFCC's financial year runs 1 October – 30 September) ──────────
 
-export const FY_START_MONTH = 3 // 0-indexed → April
+export const FY_START_MONTH = 9 // 0-indexed → October
 
 export type PeriodPreset = 'month' | 'quarter' | 'year' | 'fy' | 'custom'
 

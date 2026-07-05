@@ -289,8 +289,8 @@ export function lastMonthKeys(n: number, today = new Date()): string[] {
 
 // ── Periods ──────────────────────────────────────────────────────────────────
 
-/** GAUFCC financial year starts 1 April (UK charity convention). */
-export const FY_START_MONTH = 3 // 0-indexed → April
+/** GAUFCC's financial year runs 1 October – 30 September. */
+export const FY_START_MONTH = 9 // 0-indexed → October
 
 export type PeriodPreset = 'month' | 'quarter' | 'year' | 'fy' | 'custom'
 

@@ -12,11 +12,13 @@ import {
   ErrorNotice,
   FundTypeChip,
   LoadingRows,
+  Paginator,
   SectionLabel,
   Skeleton,
   StatusChip,
   Textarea,
   WarningBadge,
+  type PageSize,
 } from '@/components/ui'
 import { formatDate, formatMoney, formatMovement } from '@/lib/format'
 import { supabase } from '@/lib/supabase'
@@ -39,7 +41,10 @@ import {
   type VFundBalance,
 } from './lib'
 
-const PAGE_SIZE = 25
+// PostgREST caps a single request at 1,000 rows — "All" walks the result in
+// chunks (25k guard is far above any single fund's line count).
+const ALL_CHUNK = 1000
+const ALL_CAP = 25000
 
 async function fetchBalanceRow(fundId: string): Promise<VFundBalance | null> {
   const { data, error } = await supabase.from('v_fund_balances').select('*').eq('fund_id', fundId).maybeSingle()
@@ -76,10 +81,11 @@ export default function FundDetailPage() {
   const { isPulse } = usePermissions()
   const [period, setPeriod] = useState<Period>(() => ({ preset: 'fy', ...presetRange('fy') }))
   const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState<PageSize>(25)
 
   useEffect(() => {
     setPage(0)
-  }, [period.start, period.end])
+  }, [period.start, period.end, pageSize])
 
   const core = useSupabaseQuery(async () => {
     if (!id) return null
@@ -117,18 +123,36 @@ export default function FundDetailPage() {
     if (!id) return null
     const ids = await fetchTrackingIds(id)
     if (ids.length === 0) return { rows: [] as XeroTransaction[], count: 0 }
-    const { data, error, count } = await supabase
-      .from('xero_transactions')
-      .select('*', { count: 'exact' })
-      .in('tracking_option_1_id', ids)
-      .gte('date', period.start)
-      .lte('date', period.end)
-      .order('date', { ascending: false })
-      .order('line_id', { ascending: true })
-      .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1)
+    const buildQuery = () =>
+      supabase
+        .from('xero_transactions')
+        .select('*', { count: 'exact' })
+        .in('tracking_option_1_id', ids)
+        .gte('date', period.start)
+        .lte('date', period.end)
+        .order('date', { ascending: false })
+        .order('line_id', { ascending: true })
+
+    if (pageSize === 'all') {
+      const rows: XeroTransaction[] = []
+      let total = 0
+      for (let offset = 0; offset < ALL_CAP; offset += ALL_CHUNK) {
+        const { data, error, count } = await buildQuery().range(offset, offset + ALL_CHUNK - 1)
+        if (error) throw new Error(error.message)
+        total = count ?? total
+        rows.push(...((data ?? []) as XeroTransaction[]))
+        if (!data || data.length < ALL_CHUNK || rows.length >= total) break
+      }
+      return { rows, count: total }
+    }
+
+    const { data, error, count } = await buildQuery().range(
+      page * pageSize,
+      page * pageSize + pageSize - 1,
+    )
     if (error) throw new Error(error.message)
     return { rows: (data ?? []) as XeroTransaction[], count: count ?? 0 }
-  }, [id, period.start, period.end, page])
+  }, [id, period.start, period.end, page, pageSize])
 
   const pl = useMemo(() => {
     if (!plRows.data || plRows.data.unlinked) return null
@@ -362,24 +386,14 @@ export default function FundDetailPage() {
                 </tbody>
               </table>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-t border-stone-150">
-              <span className="text-[11px] text-stone-500 figure">
-                {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, txns.data.count)} of {txns.data.count}
-              </span>
-              <div className="flex gap-2">
-                <Button variant="ghost" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
-                  Previous
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={(page + 1) * PAGE_SIZE >= txns.data.count}
-                  onClick={() => setPage((p) => p + 1)}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
+            <Paginator
+              page={page}
+              pageSize={pageSize}
+              total={txns.data.count}
+              shown={txns.data.rows.length}
+              onPage={setPage}
+              onPageSize={setPageSize}
+            />
           </>
         )}
       </Card>

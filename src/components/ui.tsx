@@ -276,6 +276,105 @@ export function ErrorNotice({ message }: { message: string }) {
   )
 }
 
+// ── Pagination ───────────────────────────────────────────────────────────────
+
+export type PageSize = number | 'all'
+
+export const DEFAULT_PAGE_SIZES: PageSize[] = [25, 50, 100, 250, 500, 'all']
+
+export function pageCountFor(total: number, pageSize: PageSize): number {
+  if (pageSize === 'all') return 1
+  return Math.max(1, Math.ceil(total / pageSize))
+}
+
+/**
+ * Register footer: "x–y of total" · rows-per-page select (incl. All) ·
+ * jump-to-page number input · Previous/Next. `page` is 0-based; the parent
+ * owns the state and should reset page to 0 when the size or filters change.
+ */
+export function Paginator({
+  page,
+  pageSize,
+  total,
+  shown,
+  sizes = DEFAULT_PAGE_SIZES,
+  onPage,
+  onPageSize,
+}: {
+  page: number
+  pageSize: PageSize
+  total: number
+  /** rows actually rendered on this page (drives the x–y readout) */
+  shown: number
+  sizes?: PageSize[]
+  onPage: (page: number) => void
+  onPageSize: (size: PageSize) => void
+}) {
+  const pageCount = pageCountFor(total, pageSize)
+  const first = total === 0 ? 0 : (pageSize === 'all' ? 0 : page * pageSize) + 1
+  const last = pageSize === 'all' ? total : Math.min(page * pageSize + shown, total)
+  const jump = (raw: string) => {
+    const n = Number(raw)
+    if (!Number.isFinite(n)) return
+    onPage(Math.min(Math.max(1, Math.round(n)), pageCount) - 1)
+  }
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 border-t border-stone-150">
+      <span className="text-[11px] text-stone-500 figure">
+        {first.toLocaleString('en-GB')}–{last.toLocaleString('en-GB')} of{' '}
+        {total.toLocaleString('en-GB')}
+      </span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
+          Rows
+          <Select
+            value={String(pageSize)}
+            onChange={(e) =>
+              onPageSize(e.target.value === 'all' ? 'all' : Number(e.target.value))
+            }
+            className="!w-auto py-1 text-[11.5px]"
+            aria-label="Rows per page"
+          >
+            {sizes.map((s) => (
+              <option key={String(s)} value={String(s)}>
+                {s === 'all' ? 'All' : s}
+              </option>
+            ))}
+          </Select>
+        </label>
+        {pageSize !== 'all' && pageCount > 1 ? (
+          <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
+            Page
+            <Input
+              type="number"
+              min={1}
+              max={pageCount}
+              value={page + 1}
+              onChange={(e) => jump(e.target.value)}
+              className="!w-[64px] py-1 text-[11.5px] figure"
+              aria-label="Jump to page"
+            />
+            of {pageCount.toLocaleString('en-GB')}
+          </label>
+        ) : null}
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" disabled={page === 0} onClick={() => onPage(page - 1)}>
+            Previous
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={page + 1 >= pageCount}
+            onClick={() => onPage(page + 1)}
+          >
+            Next
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Charts (hand-rolled SVG, per the design) ────────────────────────────────
 // mint-700 primary series · cyan-600 secondary · pink highlights the one
 // point that matters · indigo gridlines at 12% opacity

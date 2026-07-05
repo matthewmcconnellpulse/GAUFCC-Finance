@@ -13,15 +13,15 @@ import {
   Input,
   LoadingRows,
   PageHeader,
+  Paginator,
   Select,
-  Button,
+  type PageSize,
 } from '@/components/ui'
 import { formatDate, formatMoney } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import { sourceTypeLabel } from '@/modules/funds/lib'
 import {
   EMPTY_TXN_FILTERS,
-  TXN_PAGE_SIZE,
   fetchActiveAccounts,
   fetchFundsForFilter,
   fetchTransactions,
@@ -43,11 +43,12 @@ export default function TransactionsPage() {
   const [filters, setFilters] = useState<TransactionFilters>(EMPTY_TXN_FILTERS)
   const [searchDraft, setSearchDraft] = useState('')
   const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState<PageSize>(50)
 
   const accounts = useSupabaseQuery(fetchActiveAccounts, [])
   const funds = useSupabaseQuery(fetchFundsForFilter, [])
   const txns = useSupabaseQuery(
-    () => fetchTransactions(filters, page),
+    () => fetchTransactions(filters, page, pageSize),
     [
       filters.search,
       filters.accountCode,
@@ -56,6 +57,7 @@ export default function TransactionsPage() {
       filters.dateFrom,
       filters.dateTo,
       page,
+      pageSize,
     ],
   )
 
@@ -72,7 +74,6 @@ export default function TransactionsPage() {
   }, [funds.data])
 
   const total = txns.data?.total ?? 0
-  const pageCount = Math.max(1, Math.ceil(total / TXN_PAGE_SIZE))
   const setFilter = (patch: Partial<TransactionFilters>) => {
     setFilters((f) => ({ ...f, ...patch }))
     setPage(0)
@@ -224,24 +225,17 @@ export default function TransactionsPage() {
             </table>
           </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between px-4 py-3 border-t border-stone-150">
-            <span className="text-[11.5px] text-stone-500">
-              {total.toLocaleString('en-GB')} lines · page {page + 1} of {pageCount}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
-                Previous
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={page + 1 >= pageCount}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Paginator
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            shown={txns.data?.rows.length ?? 0}
+            onPage={setPage}
+            onPageSize={(size) => {
+              setPageSize(size)
+              setPage(0)
+            }}
+          />
         </Card>
       )}
     </div>

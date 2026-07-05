@@ -145,7 +145,7 @@ export default function DashboardPage() {
               tone="hero"
               label="Total funds"
               value={formatMoney(total, { whole: true })}
-              sub={`${formatMovement(ytdNet, { whole: true })} this year`}
+              sub={`${formatMovement(ytdNet, { whole: true })} this FY`}
             />
             <StatTile
               label="Restricted"
