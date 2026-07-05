@@ -92,9 +92,11 @@ Deno.serve(async (req) => {
     return json({ report: first })
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
-    if (message.includes('(403)')) {
+    // Missing scope surfaces as 401 AuthorizationUnsuccessful on custom
+    // connections (403 on standard OAuth apps) — same fix either way.
+    if (message.includes('(403)') || message.includes('(401)')) {
       return errorResponse(
-        'Xero refused the report (403). The custom connection needs the accounting.reports.read scope — tick it under developer.xero.com → your app → Configuration, then try again.',
+        'Xero refused the report — the custom connection is missing the accounting.reports.read scope. Tick it under developer.xero.com → your app → Configuration, re-authorise the connection when prompted, then try again.',
         502,
       )
     }

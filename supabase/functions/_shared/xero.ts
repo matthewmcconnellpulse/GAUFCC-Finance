@@ -64,6 +64,7 @@ export async function xeroFetch<T = unknown>(
   const url = new URL(`${API_BASE}/${path.replace(/^\//, '')}`)
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v)
 
+  let refreshedAuth = false
   for (let attempt = 0; ; attempt++) {
     const token = await getXeroToken()
     const headers: Record<string, string> = {
@@ -82,6 +83,15 @@ export async function xeroFetch<T = unknown>(
     if (res.status === 429 && attempt < maxRetries) {
       const retryAfter = Number(res.headers.get('Retry-After') ?? '5')
       await new Promise((r) => setTimeout(r, (retryAfter + 1) * 1000))
+      continue
+    }
+    if ((res.status === 401 || res.status === 403) && !refreshedAuth) {
+      // The cached token predates any scope/authorisation change (tokens live
+      // 30 minutes) — mint a fresh one and retry once before giving up, so a
+      // newly-granted scope works immediately.
+      refreshedAuth = true
+      cachedToken = null
+      await res.body?.cancel()
       continue
     }
     if (res.status === 304) return { status: 304, data: null } // not modified
