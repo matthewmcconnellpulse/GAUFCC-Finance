@@ -49,7 +49,7 @@ export default function ApprovalQueuePage() {
   const perms = usePermissions()
   const deadline = useDeadline()
 
-  const canApprove = perms.canApprove // CEO
+  const canApprove = perms.canApprove // CEO, or the Pulse admin signing off on their behalf
   const readOnly = !canApprove && perms.isPulse
   const allowed = canApprove || perms.isPulse
 
@@ -223,8 +223,8 @@ export default function ApprovalQueuePage() {
   if (!allowed) {
     return (
       <AccessDenied
-        title="This queue is for the CEO"
-        hint="Expense approvals are the CEO's call. Your own claims live under Expenses."
+        title="This queue is for approvers"
+        hint="Claims are signed off by the CEO or the Pulse admin. Your own claims live under Expenses."
       />
     )
   }
@@ -237,7 +237,7 @@ export default function ApprovalQueuePage() {
         title="Approvals"
         subtitle={
           readOnly
-            ? 'Read-only — approval is the CEO’s call. Approved claims below are ready to push to Xero.'
+            ? 'Read-only — sign-off is for the CEO or the Pulse admin. Approved claims below are ready to push to Xero.'
             : 'Submitted claims waiting for your sign-off — approvals are audit-logged'
         }
         actions={
@@ -391,7 +391,7 @@ export default function ApprovalQueuePage() {
               </>
             ) : (
               <p className="text-[11px] text-stone-500 mt-4 border-t border-stone-150 pt-3">
-                Read-only — only the CEO can approve or reject.
+                Read-only — only the CEO or the Pulse admin can approve or reject.
               </p>
             )}
           </div>
@@ -441,7 +441,7 @@ export default function ApprovalQueuePage() {
                 </>
               ) : (
                 <p className="text-[11.5px] text-stone-500 mt-4">
-                  Read-only — only the CEO can approve or reject.
+                  Read-only — only the CEO or the Pulse admin can approve or reject.
                 </p>
               )}
             </Card>

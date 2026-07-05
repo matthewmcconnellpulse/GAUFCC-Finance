@@ -432,6 +432,14 @@ export const SETTING_KEYS = {
   warningDefaults: 'warning_defaults',
 } as const
 
+export interface UserActivityRow {
+  id: number
+  profile_id: string
+  path: string
+  page: string
+  occurred_at: string
+}
+
 export interface AuditLogEntry {
   id: string
   actor_id: string | null

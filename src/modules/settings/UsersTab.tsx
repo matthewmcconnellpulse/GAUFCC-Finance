@@ -3,9 +3,10 @@
  * invite-user modal (invokes the invite-user edge function) and the
  * fund-manager assignment editor that drives per-fund trustee visibility.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { usePermissions } from '@/auth/AuthProvider'
 import {
+  AiBadge,
   Button,
   Card,
   EmptyState,
@@ -17,18 +18,20 @@ import {
   StatusChip,
   cx,
 } from '@/components/ui'
-import { formatDate } from '@/lib/format'
+import { formatDate, formatDateTime, timeAgo } from '@/lib/format'
 import { invokeFunction } from '@/lib/supabase'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
-import type { Fund, Organisation, Profile, Role } from '@/types/db'
+import type { Fund, Organisation, Profile, Role, UserActivityRow } from '@/types/db'
 import {
   ALL_ROLES,
   fetchAllFunds,
   fetchFundManagers,
   fetchProfiles,
+  fetchUserActivity,
   ROLE_LABELS,
   saveFundManagerAssignments,
   setProfileActive,
+  updateProfile,
 } from './lib'
 import { Modal, RoleChip, SectionCard, Toggle } from './components'
 
@@ -40,6 +43,7 @@ export default function UsersTab() {
   const managersQuery = useSupabaseQuery(() => fetchFundManagers(), [])
 
   const [inviteOpen, setInviteOpen] = useState(false)
+  const [editUser, setEditUser] = useState<Profile | null>(null)
   const [toggleError, setToggleError] = useState<string | null>(null)
 
   if (!isAdmin) {
@@ -99,6 +103,7 @@ export default function UsersTab() {
                   <th className="th-register">Organisation</th>
                   <th className="th-register">Joined</th>
                   <th className="th-register">Active</th>
+                  <th className="th-register" aria-label="Edit" />
                 </tr>
               </thead>
               <tbody>
@@ -113,6 +118,15 @@ export default function UsersTab() {
                     <td className="td-register figure whitespace-nowrap">{formatDate(p.created_at)}</td>
                     <td className="td-register">
                       <Toggle on={p.active} onChange={() => void toggleActive(p)} label={`${p.full_name} active`} />
+                    </td>
+                    <td className="td-register">
+                      <button
+                        type="button"
+                        className="text-[11px] text-indigo underline underline-offset-2"
+                        onClick={() => setEditUser(p)}
+                      >
+                        Edit
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -147,6 +161,9 @@ export default function UsersTab() {
         )}
       </SectionCard>
 
+      {/* Activity trail + AI interest summaries */}
+      <ActivitySection profiles={profiles} />
+
       {inviteOpen ? (
         <InviteModal
           onClose={() => setInviteOpen(false)}
@@ -156,7 +173,256 @@ export default function UsersTab() {
           }}
         />
       ) : null}
+      {editUser ? (
+        <EditUserModal
+          user={editUser}
+          onClose={() => setEditUser(null)}
+          onSaved={() => {
+            setEditUser(null)
+            profilesQuery.refetch()
+          }}
+        />
+      ) : null}
     </div>
+  )
+}
+
+// ── Edit user ────────────────────────────────────────────────────────────────
+
+function EditUserModal({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: Profile
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [fullName, setFullName] = useState(user.full_name)
+  const [role, setRole] = useState<Role>(user.role)
+  const [organisation, setOrganisation] = useState<Organisation>(user.organisation)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function save() {
+    if (!fullName.trim()) {
+      setError('A name is required')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await updateProfile(user.id, { full_name: fullName.trim(), role, organisation })
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The user could not be updated')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={`Edit ${user.full_name || user.email}`} onClose={onClose}>
+      <div className="space-y-3">
+        <Field label="Full name">
+          <Input value={fullName} onChange={(e) => setFullName(e.target.value)} />
+        </Field>
+        <Field label="Email" hint="The sign-in email is fixed to their login — invite a new user to change it.">
+          <Input value={user.email} disabled className="opacity-60" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Role">
+            <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+              {ALL_ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABELS[r]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Organisation">
+            <Select
+              value={organisation}
+              onChange={(e) => setOrganisation(e.target.value as Organisation)}
+            >
+              <option value="pulse">Pulse</option>
+              <option value="gaufcc">GAUFCC</option>
+            </Select>
+          </Field>
+        </div>
+        <p className="text-[10.5px] text-stone-500">
+          Role changes take effect on their next page load and are audit-logged. Access follows the
+          role immediately — no re-invite needed.
+        </p>
+        {error ? <ErrorNotice message={error} /> : null}
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => void save()} disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── User activity + AI interest summaries ────────────────────────────────────
+
+interface ActivityInsight {
+  profile_id: string
+  name: string
+  role: string
+  summary: string
+}
+
+function ActivitySection({ profiles }: { profiles: Profile[] }) {
+  const activity = useSupabaseQuery(() => fetchUserActivity(30), [])
+  const [openUser, setOpenUser] = useState<string | null>(null)
+  const [insights, setInsights] = useState<ActivityInsight[] | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+
+  const rows = activity.data ?? []
+  const byUser = new Map<string, UserActivityRow[]>()
+  for (const row of rows) {
+    const list = byUser.get(row.profile_id)
+    if (list) list.push(row)
+    else byUser.set(row.profile_id, [row])
+  }
+
+  const summaries = [...byUser.entries()]
+    .map(([profileId, events]) => {
+      const profile = profiles.find((p) => p.id === profileId)
+      const pageCounts = new Map<string, number>()
+      for (const e of events) pageCounts.set(e.page, (pageCounts.get(e.page) ?? 0) + 1)
+      const topPages = [...pageCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+      return {
+        profileId,
+        name: profile?.full_name ?? 'Unknown user',
+        role: profile?.role ?? null,
+        views: events.length,
+        lastSeen: events[0]?.occurred_at ?? null,
+        topPages,
+        recent: events.slice(0, 15),
+      }
+    })
+    .sort((a, b) => (b.lastSeen ?? '').localeCompare(a.lastSeen ?? ''))
+
+  async function generate() {
+    setGenerating(true)
+    setAiError(null)
+    try {
+      const res = await invokeFunction<{ insights: ActivityInsight[] }>('user-activity-insights')
+      setInsights(res.insights)
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'The insights could not be generated')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  return (
+    <SectionCard
+      title="User activity"
+      hint="Where each signed-in user actually goes — last 30 days, recorded per page view. Only the Pulse admin sees this."
+      actions={
+        <Button size="sm" variant="ghost" onClick={() => void generate()} disabled={generating}>
+          {generating ? 'Reading the trail…' : insights ? 'Refresh AI summaries' : 'AI — what interests each user?'}
+        </Button>
+      }
+    >
+      {aiError ? (
+        <div className="px-5 pt-4">
+          <ErrorNotice message={aiError} />
+        </div>
+      ) : null}
+
+      {insights && insights.length > 0 ? (
+        <div className="px-5 pt-4 grid gap-2.5 sm:grid-cols-2">
+          {insights.map((i) => (
+            <div key={i.profile_id} className="rounded-card border border-stone-150 bg-paper px-4 py-3">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-[12.5px] font-medium text-ink">{i.name}</span>
+                <AiBadge />
+              </div>
+              <p className="text-[12px] text-stone-700 leading-relaxed">{i.summary}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {activity.loading && !activity.data ? (
+        <LoadingRows cols={4} rows={4} />
+      ) : activity.error ? (
+        <div className="p-5">
+          <ErrorNotice message={activity.error} />
+        </div>
+      ) : summaries.length === 0 ? (
+        <EmptyState
+          title="No activity recorded yet"
+          hint="Page views are recorded from now on — check back once people have signed in and moved around."
+        />
+      ) : (
+        <div className="overflow-x-auto pt-2">
+          <table className="w-full text-[12px] min-w-[640px]">
+            <thead>
+              <tr>
+                <th className="th-register">User</th>
+                <th className="th-register">Last active</th>
+                <th className="th-register text-right">Views · 30d</th>
+                <th className="th-register">Goes to most</th>
+                <th className="th-register" aria-label="Trail" />
+              </tr>
+            </thead>
+            <tbody>
+              {summaries.map((u) => (
+                <Fragment key={u.profileId}>
+                  <tr>
+                    <td className="td-register font-medium text-ink whitespace-nowrap">{u.name}</td>
+                    <td className="td-register text-stone-600 whitespace-nowrap">
+                      {u.lastSeen ? timeAgo(u.lastSeen) : '—'}
+                    </td>
+                    <td className="td-register text-right figure">{u.views}</td>
+                    <td className="td-register text-stone-600">
+                      {u.topPages.map(([page, n]) => `${page} (${n})`).join(' · ') || '—'}
+                    </td>
+                    <td className="td-register text-right">
+                      <button
+                        type="button"
+                        className="text-[11px] text-indigo underline underline-offset-2"
+                        onClick={() => setOpenUser(openUser === u.profileId ? null : u.profileId)}
+                      >
+                        {openUser === u.profileId ? 'Hide trail' : 'Trail'}
+                      </button>
+                    </td>
+                  </tr>
+                  {openUser === u.profileId ? (
+                    <tr>
+                      <td colSpan={5} className="px-5 pb-3 bg-paper">
+                        <ul className="pt-2 space-y-1">
+                          {u.recent.map((e) => (
+                            <li key={e.id} className="flex flex-wrap items-baseline gap-x-3 text-[11.5px]">
+                              <span className="font-mono text-[10.5px] text-stone-400 whitespace-nowrap">
+                                {formatDateTime(e.occurred_at)}
+                              </span>
+                              <span className="text-ink">{e.page}</span>
+                              <span className="font-mono text-[10.5px] text-stone-500 truncate max-w-[280px]">
+                                {e.path}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </SectionCard>
   )
 }
 

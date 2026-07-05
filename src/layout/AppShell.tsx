@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth, usePermissions } from '@/auth/AuthProvider'
+import { recordActivity } from '@/lib/activity'
 import { useSync } from '@/sync/SyncProvider'
 import { timeAgo } from '@/lib/format'
 import { cx } from '@/components/ui'
@@ -84,6 +85,11 @@ function SyncButton() {
 export default function AppShell() {
   const { profile, signOut } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    if (profile?.id) recordActivity(profile.id, location.pathname)
+  }, [profile?.id, location.pathname])
   const sections = useNavSections()
     .map((s) => ({ ...s, items: s.items.filter((i) => i.show) }))
     .filter((s) => s.items.length > 0)

@@ -4,8 +4,7 @@
  * classification queue and the audit log. Module-owned.
  */
 import { supabase } from '@/lib/supabase'
-import type {
-  AuditLogEntry,
+import type { AuditLogEntry,
   Fund,
   FundManager,
   Profile,
@@ -13,8 +12,7 @@ import type {
   Setting,
   SyncRun,
   WarningRules,
-  XeroConnection,
-} from '@/types/db'
+  XeroConnection, UserActivityRow } from '@/types/db'
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
@@ -79,6 +77,27 @@ export async function fetchProfiles(): Promise<Profile[]> {
     .order('full_name')
   if (error) throw new Error(error.message)
   return (data ?? []) as Profile[]
+}
+
+export async function updateProfile(
+  id: string,
+  patch: Partial<Pick<Profile, 'full_name' | 'role' | 'organisation'>>,
+): Promise<void> {
+  const { error } = await supabase.from('profiles').update(patch).eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+/** Last N days of the page-view trail, newest first. Admin-only via RLS. */
+export async function fetchUserActivity(days: number): Promise<UserActivityRow[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+  const { data, error } = await supabase
+    .from('user_activity')
+    .select('*')
+    .gte('occurred_at', since)
+    .order('occurred_at', { ascending: false })
+    .limit(10000)
+  if (error) throw new Error(error.message)
+  return (data ?? []) as UserActivityRow[]
 }
 
 export async function setProfileActive(id: string, active: boolean): Promise<void> {

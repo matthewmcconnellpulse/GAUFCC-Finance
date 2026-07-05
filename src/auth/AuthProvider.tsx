@@ -123,7 +123,8 @@ export function usePermissions() {
     isTrustee: role === 'trustee',
     isSubmitter: role === 'submitter',
     canSync: isPulse || role === 'ceo',
-    canApprove: role === 'ceo',
+    // Sign-off: the CEO, or the Pulse admin standing in (audit-logged either way)
+    canApprove: role === 'ceo' || role === 'pulse_admin',
     canEditSettings: role === 'pulse_admin' || role === 'ceo',
     canSeeReports: isPulse || role === 'ceo' || role === 'trustee',
   }
