@@ -92,8 +92,28 @@ export function today(): string {
   return isoDate(new Date())
 }
 
-export function startOfYear(): string {
-  return `${new Date().getFullYear()}-01-01`
+// GAUFCC's financial year runs 1 October → 30 September ("FY 25/26" =
+// 01.10.2025 – 30.09.2026). `offset` shifts whole years: 0 = the FY containing
+// today, -1 = the previous FY.
+
+const FY_START_MONTH = 10 // October, 1-based
+
+function fyStartYear(ref = new Date()): number {
+  return ref.getMonth() + 1 >= FY_START_MONTH ? ref.getFullYear() : ref.getFullYear() - 1
+}
+
+export function fyStart(offset = 0): string {
+  return `${fyStartYear() + offset}-10-01`
+}
+
+export function fyEnd(offset = 0): string {
+  return `${fyStartYear() + offset + 1}-09-30`
+}
+
+/** e.g. "25/26" for the FY starting 01.10.2025. */
+export function fyLabel(offset = 0): string {
+  const y = fyStartYear() + offset
+  return `${String(y).slice(2)}/${String(y + 1).slice(2)}`
 }
 
 export function startOfMonth(): string {
@@ -101,18 +121,9 @@ export function startOfMonth(): string {
   return isoDate(new Date(now.getFullYear(), now.getMonth(), 1))
 }
 
-export function monthsAgoStart(months: number): string {
-  const now = new Date()
-  return isoDate(new Date(now.getFullYear(), now.getMonth() - months, 1))
-}
-
 export function endOfLastMonth(): string {
   const now = new Date()
   return isoDate(new Date(now.getFullYear(), now.getMonth(), 0))
-}
-
-export function endOfLastYear(): string {
-  return `${new Date().getFullYear() - 1}-12-31`
 }
 
 // ── Account transactions (mirror) ────────────────────────────────────────────

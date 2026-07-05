@@ -21,12 +21,11 @@ import { formatDateTime } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import {
   endOfLastMonth,
-  endOfLastYear,
   fetchXeroReport,
-  isoDate,
-  monthsAgoStart,
+  fyEnd,
+  fyLabel,
+  fyStart,
   startOfMonth,
-  startOfYear,
   today,
   xeroDateToIso,
   type XeroReport,
@@ -134,8 +133,10 @@ interface Preset {
 }
 
 export function ProfitLossPage() {
-  const [from, setFrom] = useState(startOfYear())
-  const [to, setTo] = useState(today())
+  // GAUFCC's FY runs Oct–Sep; default to the current one in full (25/26
+  // ends 30.09.2026).
+  const [from, setFrom] = useState(fyStart())
+  const [to, setTo] = useState(fyEnd())
 
   const report = useSupabaseQuery(
     () => fetchXeroReport('ProfitAndLoss', { fromDate: from, toDate: to }),
@@ -143,16 +144,10 @@ export function ProfitLossPage() {
   )
 
   const presets: Preset[] = [
+    { label: `FY ${fyLabel()}`, value: () => ({ from: fyStart(), to: fyEnd() }) },
+    { label: 'FY to date', value: () => ({ from: fyStart(), to: today() }) },
+    { label: `FY ${fyLabel(-1)}`, value: () => ({ from: fyStart(-1), to: fyEnd(-1) }) },
     { label: 'This month', value: () => ({ from: startOfMonth(), to: today() }) },
-    { label: 'This year', value: () => ({ from: startOfYear(), to: today() }) },
-    { label: 'Last 12 months', value: () => ({ from: monthsAgoStart(11), to: today() }) },
-    {
-      label: 'Last year',
-      value: () => {
-        const y = new Date().getFullYear() - 1
-        return { from: `${y}-01-01`, to: `${y}-12-31` }
-      },
-    },
   ]
 
   return (
@@ -183,22 +178,16 @@ export function ProfitLossPage() {
 }
 
 export function BalanceSheetPage() {
-  const [date, setDate] = useState(today())
+  // Default to the current FY's year end (30 September).
+  const [date, setDate] = useState(fyEnd())
 
   const report = useSupabaseQuery(() => fetchXeroReport('BalanceSheet', { date }), [date])
 
   const presets: Preset[] = [
+    { label: `${fyLabel()} year end`, value: () => ({ date: fyEnd() }) },
+    { label: `${fyLabel(-1)} year end`, value: () => ({ date: fyEnd(-1) }) },
     { label: 'Today', value: () => ({ date: today() }) },
     { label: 'End of last month', value: () => ({ date: endOfLastMonth() }) },
-    {
-      label: 'End of last quarter',
-      value: () => {
-        const now = new Date()
-        const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3
-        return { date: isoDate(new Date(now.getFullYear(), quarterStartMonth, 0)) }
-      },
-    },
-    { label: 'End of last year', value: () => ({ date: endOfLastYear() }) },
   ]
 
   return (
