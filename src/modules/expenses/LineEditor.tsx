@@ -83,6 +83,9 @@ export function LineCard({
                   const v = descText.trim()
                   if (v !== line.description) onPatch({ description: v })
                 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur()
+                }}
                 aria-label="Line description"
               />
             ) : (
@@ -177,6 +180,9 @@ export function LineCard({
                     value={netText}
                     onChange={(e) => setNetText(e.target.value)}
                     onBlur={() => commitAmounts(netText, vatText)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
                     className="py-1.5 text-[12px] font-mono"
                   />
                 ) : (
@@ -194,6 +200,9 @@ export function LineCard({
                     value={vatText}
                     onChange={(e) => setVatText(e.target.value)}
                     onBlur={() => commitAmounts(netText, vatText)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
                     className="py-1.5 text-[12px] font-mono"
                   />
                 ) : (

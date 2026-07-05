@@ -82,6 +82,19 @@ export default function ClaimDetailPage() {
   const [pushing, setPushing] = useState(false)
   const jobSeq = useRef(0)
 
+  // Everything on this screen saves as you go (on blur / on change) — there
+  // is deliberately no Save button. This counter drives the "Saving… / saved"
+  // cue so that fact is visible.
+  const [pendingSaves, setPendingSaves] = useState(0)
+  const trackSave = async <T,>(work: Promise<T>): Promise<T> => {
+    setPendingSaves((n) => n + 1)
+    try {
+      return await work
+    } finally {
+      setPendingSaves((n) => n - 1)
+    }
+  }
+
   const funds = fundsQ.data ?? []
   const categories = catsQ.data ?? []
 
@@ -101,10 +114,12 @@ export default function ClaimDetailPage() {
 
   const total = useMemo(() => sumGross(lines), [lines])
   const unconfirmedCount = useMemo(() => lines.filter(needsConfirmation).length, [lines])
-  const incompleteCount = useMemo(
-    () => lines.filter((l) => !l.description.trim() || !l.date || l.gross === 0).length,
+  const missingDescriptions = useMemo(
+    () => lines.filter((l) => !l.description.trim()).length,
     [lines],
   )
+  const missingAmounts = useMemo(() => lines.filter((l) => l.gross === 0).length, [lines])
+  const missingDates = useMemo(() => lines.filter((l) => !l.date).length, [lines])
 
   // ── Mutation helpers (optimistic, with error surface) ─────────────────────
 
@@ -125,7 +140,7 @@ export default function ClaimDetailPage() {
     setLines(next)
     setActionError(null)
     try {
-      await updateLine(lineId, patch)
+      await trackSave(updateLine(lineId, patch))
       if ('gross' in patch) persistTotal(next)
     } catch (e) {
       fail(e, 'Could not save the line')
@@ -298,10 +313,16 @@ export default function ClaimDetailPage() {
 
   const submitBlockers: string[] = []
   if (lines.length === 0) submitBlockers.push('add at least one line')
-  if (incompleteCount > 0)
+  if (missingDescriptions > 0)
     submitBlockers.push(
-      `${incompleteCount} ${incompleteCount === 1 ? 'line needs' : 'lines need'} a description and an amount`,
+      `${missingDescriptions} ${missingDescriptions === 1 ? 'line needs' : 'lines need'} a description — tap “What was this for?” on the line`,
     )
+  if (missingAmounts > 0)
+    submitBlockers.push(
+      `${missingAmounts} ${missingAmounts === 1 ? 'line needs' : 'lines need'} an amount`,
+    )
+  if (missingDates > 0)
+    submitBlockers.push(`${missingDates} ${missingDates === 1 ? 'line needs' : 'lines need'} a date`)
   if (unconfirmedCount > 0)
     submitBlockers.push(
       `${unconfirmedCount} AI-read ${unconfirmedCount === 1 ? 'line needs' : 'lines need'} your check`,
@@ -391,10 +412,20 @@ export default function ClaimDetailPage() {
           ) : null}
 
           <div>
-            <div className="flex items-center justify-between mb-2.5">
-              <SectionLabel>
-                Lines{lines.length > 0 ? ` · ${lines.length}` : ''}
-              </SectionLabel>
+            <div className="flex items-center justify-between gap-3 mb-2.5">
+              <span className="inline-flex items-baseline gap-2.5">
+                <SectionLabel>
+                  Lines{lines.length > 0 ? ` · ${lines.length}` : ''}
+                </SectionLabel>
+                {canEditAll ? (
+                  <span
+                    className={`text-[10.5px] ${pendingSaves > 0 ? 'text-cyan-700' : 'text-stone-400'}`}
+                    aria-live="polite"
+                  >
+                    {pendingSaves > 0 ? 'Saving…' : 'changes save automatically'}
+                  </span>
+                ) : null}
+              </span>
               {canEditAll ? (
                 <Button size="sm" variant="ghost" onClick={() => void addManualLine()}>
                   Add a line manually
@@ -438,8 +469,15 @@ export default function ClaimDetailPage() {
 
           {/* Total strip */}
           {lines.length > 0 ? (
-            <div className="bg-paper-2 border border-stone-150 rounded-card px-4 sm:px-5 py-3 flex items-center justify-between">
-              <span className="text-[12.5px] font-medium text-ink">Claim total</span>
+            <div className="bg-paper-2 border border-stone-150 rounded-card px-4 sm:px-5 py-3 flex items-center justify-between gap-3">
+              <span className="text-[12.5px] font-medium text-ink">
+                Claim total
+                {isDraft ? (
+                  <span className="block text-[10.5px] font-normal text-stone-500 mt-0.5">
+                    saved as a draft — safe to leave and come back
+                  </span>
+                ) : null}
+              </span>
               <span className="font-mono text-[15px] font-medium text-ink">{formatMoney(total)}</span>
             </div>
           ) : null}
