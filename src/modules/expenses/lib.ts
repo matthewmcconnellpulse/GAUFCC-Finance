@@ -276,7 +276,11 @@ export async function rejectClaim(id: string, approverId: string, comment: strin
 }
 
 /** Human Pulse trigger only — CEO approval never auto-pushes. */
-export async function pushClaimToXero(claimId: string): Promise<{ xero_bill_id: string }> {
+export async function pushClaimToXero(claimId: string): Promise<{
+  xero_bill_id: string
+  receipts_attached?: number
+  receipts_failed?: string[]
+}> {
   return invokeFunction<{ xero_bill_id: string }>('xero-push-bill', { claim_id: claimId })
 }
 

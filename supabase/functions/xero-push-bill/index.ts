@@ -16,12 +16,17 @@
  * Line amounts are sent POSITIVE (a bill's lines are naturally positive in
  * Xero); the sync engine's signed mirror convention applies only to the
  * read model and is handled when the bill syncs back down.
+ *
+ * Receipts: each line's receipt is attached to the draft bill via the
+ * Attachments API (needs the accounting.attachments scope). Best-effort —
+ * a failed attachment never blocks the bill; failures come back in the
+ * response so the UI can say which receipts to add by hand.
  */
 
 import { handleOptions, json, errorResponse } from '../_shared/http.ts'
 import { getCaller, callerHasRole, serviceClient } from '../_shared/auth.ts'
 import { auditLog } from '../_shared/audit.ts'
-import { xeroFetch } from '../_shared/xero.ts'
+import { uploadXeroAttachment, xeroFetch } from '../_shared/xero.ts'
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 interface ClaimRow {
@@ -42,6 +47,7 @@ interface LineRow {
   net: number
   vat: number
   gross: number
+  receipt_storage_path: string | null
 }
 
 interface XeroContactApi {
@@ -166,6 +172,61 @@ async function buildTrackingByFund(
   return result
 }
 
+const ATTACHMENT_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  heic: 'image/heic',
+}
+
+/**
+ * Attach each line's receipt to the draft bill. Returns the names that could
+ * not be attached (missing scope, oversize, storage miss) — the caller
+ * reports them without failing the push.
+ */
+async function attachReceipts(
+  svc: SupabaseClient,
+  billId: string,
+  lines: LineRow[],
+): Promise<{ attached: number; failed: string[] }> {
+  const paths = lines
+    .map((l) => l.receipt_storage_path)
+    .filter((p): p is string => Boolean(p))
+  let attached = 0
+  const failed: string[] = []
+  const seen = new Set<string>()
+
+  for (const path of paths) {
+    if (seen.has(path)) continue
+    seen.add(path)
+    const baseName = path.split('/').pop() ?? 'receipt'
+    // Xero rejects duplicate filenames on one document — the upload prefix
+    // (timestamp) in our storage names already keeps them unique.
+    const fileName = baseName.slice(0, 250)
+    try {
+      const { data: blob, error: downloadError } = await svc.storage
+        .from('receipts')
+        .download(path)
+      if (downloadError || !blob) {
+        throw new Error(downloadError?.message ?? 'download failed')
+      }
+      const extension = fileName.toLowerCase().split('.').pop() ?? ''
+      const contentType =
+        blob.type && blob.type !== 'application/octet-stream'
+          ? blob.type
+          : (ATTACHMENT_TYPES[extension] ?? 'application/octet-stream')
+      await uploadXeroAttachment('Invoices', billId, fileName, await blob.arrayBuffer(), contentType)
+      attached += 1
+    } catch (e) {
+      console.error('[xero-push-bill] attachment failed', path, e)
+      failed.push(fileName)
+    }
+  }
+  return { attached, failed }
+}
+
 /** Next payment run date (settings key payment_run_day, default the 17th). */
 async function nextPaymentRunDate(svc: SupabaseClient): Promise<string> {
   let day = 17
@@ -229,7 +290,7 @@ Deno.serve(async (req) => {
 
   const { data: linesData, error: linesError } = await svc
     .from('expense_lines')
-    .select('id, date, description, category, fund_id, net, vat, gross')
+    .select('id, date, description, category, fund_id, net, vat, gross, receipt_storage_path')
     .eq('claim_id', claim.id)
     .order('date', { ascending: true })
   if (linesError) return errorResponse(`Could not load claim lines: ${linesError.message}`, 500)
@@ -291,6 +352,9 @@ Deno.serve(async (req) => {
     const xeroBillId = invoiceResponse?.Invoices?.[0]?.InvoiceID
     if (!xeroBillId) throw new Error('Xero did not return an InvoiceID for the draft bill')
 
+    // Receipts ride along as bill attachments — best-effort, never blocking.
+    const receipts = await attachReceipts(svc, xeroBillId, lines)
+
     const { error: updateError } = await svc
       .from('expense_claims')
       .update({ status: 'pushed_to_xero', xero_bill_id: xeroBillId })
@@ -309,11 +373,20 @@ Deno.serve(async (req) => {
       entity: 'expense_claims',
       entity_id: claim.id,
       before: { status: claim.status, xero_bill_id: claim.xero_bill_id },
-      after: { status: 'pushed_to_xero', xero_bill_id: xeroBillId },
+      after: {
+        status: 'pushed_to_xero',
+        xero_bill_id: xeroBillId,
+        receipts_attached: receipts.attached,
+        receipts_failed: receipts.failed,
+      },
       ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
     })
 
-    return json({ xero_bill_id: xeroBillId })
+    return json({
+      xero_bill_id: xeroBillId,
+      receipts_attached: receipts.attached,
+      receipts_failed: receipts.failed,
+    })
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     console.error('[xero-push-bill]', message)

@@ -260,8 +260,13 @@ export default function ClaimDetailPage() {
     setPushing(true)
     setActionError(null)
     try {
-      const { xero_bill_id } = await pushClaimToXero(claim.id)
-      setClaim((c) => (c ? { ...c, status: 'pushed_to_xero', xero_bill_id } : c))
+      const result = await pushClaimToXero(claim.id)
+      setClaim((c) => (c ? { ...c, status: 'pushed_to_xero', xero_bill_id: result.xero_bill_id } : c))
+      if (result.receipts_failed && result.receipts_failed.length > 0) {
+        setActionError(
+          `The draft bill was created, but ${result.receipts_failed.length} receipt${result.receipts_failed.length === 1 ? '' : 's'} could not be attached (${result.receipts_failed.join(', ')}) — if this mentions scopes, tick accounting.attachments on the Xero app and re-authorise, then add the receipts to the bill by hand this time.`,
+        )
+      }
     } catch (e) {
       fail(e, 'Could not push the bill to Xero')
     } finally {

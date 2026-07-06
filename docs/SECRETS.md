@@ -39,7 +39,7 @@ by hand, and never put the service-role key anywhere else.
 2. **New app** → choose **Custom connection** (not "Web app"). Custom
    connections are Xero's machine-to-machine product: one app = one
    organisation, no OAuth redirect dance, tokens via `client_credentials`.
-3. Scopes to tick — exactly these four, nothing more (least privilege):
+3. Scopes to tick — exactly these five, nothing more (least privilege):
    - `accounting.transactions` (read/write — mirrors invoices/bills/bank
      transactions and pushes approved-expense bills)
    - `accounting.contacts` (read/write — supplier lookup/creation on bill push)
@@ -48,6 +48,9 @@ by hand, and never put the service-role key anywhere else.
    - `accounting.reports.read` (Financials → Profit & Loss and Balance Sheet
      are rendered live from Xero's Reports API; without this scope those two
      screens show a "needs the reports scope" error, everything else works)
+   - `accounting.attachments` (receipt images/PDFs ride along when an
+     approved claim is pushed — they attach to the draft bill; without this
+     scope the bill still pushes and the UI lists the receipts to add by hand)
    No journals, payments or budgets scopes — the platform never posts
    journals or payments.
 4. Select the authorising user; they'll get an email to authorise the

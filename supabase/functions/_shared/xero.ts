@@ -103,6 +103,35 @@ export async function xeroFetch<T = unknown>(
   }
 }
 
+/**
+ * Attach a file to a Xero document (raw-body PUT — xeroFetch only speaks
+ * JSON). Requires the accounting.attachments scope on the connection.
+ * Endpoint: PUT /{docType}/{guid}/Attachments/{filename}.
+ */
+export async function uploadXeroAttachment(
+  docType: 'Invoices' | 'BankTransactions',
+  documentId: string,
+  fileName: string,
+  bytes: ArrayBuffer,
+  contentType: string,
+): Promise<void> {
+  const token = await getXeroToken()
+  const url = `${API_BASE}/${docType}/${documentId}/Attachments/${encodeURIComponent(fileName)}`
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'Content-Type': contentType,
+    },
+    body: bytes,
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Xero attachment upload failed (${res.status}): ${text.slice(0, 300)}`)
+  }
+}
+
 /** Xero serialises dates as `/Date(1712345678000+0000)/` — normalise to ISO. */
 export function parseXeroDate(value: string | null | undefined): string | null {
   if (!value) return null
