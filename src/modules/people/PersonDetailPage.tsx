@@ -26,6 +26,7 @@ import { OnboardingStatusChip, PersonTypeChip } from './components'
 import {
   createPersonLogin,
   docsFromSubmissions,
+  generatePersonLoginLink,
   fetchPerson,
   fetchSubmissions,
   revealBankDetails,
@@ -614,6 +615,37 @@ function EditPersonForm({
 
 // ── Login (expenses access) ──────────────────────────────────────────────────
 
+/** Read-only value with a one-tap copy — for links Pulse sends on themselves. */
+function CopyField({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Older Safari: select the text so a manual copy is one gesture away
+      const el = document.getElementById(`copy-${label}`) as HTMLInputElement | null
+      el?.select()
+    }
+  }
+  return (
+    <div className="flex gap-2">
+      <Input
+        id={`copy-${label}`}
+        readOnly
+        value={value}
+        onFocus={(e) => e.target.select()}
+        className="font-mono !text-[10.5px] flex-1 min-w-0"
+        aria-label={label}
+      />
+      <Button variant="ghost" size="sm" onClick={() => void copy()} className="shrink-0">
+        {copied ? 'Copied ✓' : 'Copy'}
+      </Button>
+    </div>
+  )
+}
+
 function LoginCard({
   person,
   isAdmin,
@@ -624,21 +656,40 @@ function LoginCard({
   onChanged: () => void
 }) {
   const [email, setEmail] = useState(person.email ?? '')
-  const [busy, setBusy] = useState(false)
-  const [sent, setSent] = useState(false)
+  const [busy, setBusy] = useState<'email' | 'link' | null>(null)
+  const [sentEmail, setSentEmail] = useState(false)
+  const [link, setLink] = useState<{ url: string; existing: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  async function invite() {
-    setBusy(true)
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  const portalUrl = window.location.origin
+
+  async function inviteByEmail() {
+    setBusy('email')
     setError(null)
     try {
       await createPersonLogin(person, email.trim().toLowerCase())
-      setSent(true)
+      setSentEmail(true)
       onChanged()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The invite could not be sent')
     } finally {
-      setBusy(false)
+      setBusy(null)
+    }
+  }
+
+  async function getLink() {
+    setBusy('link')
+    setError(null)
+    try {
+      const targetEmail = (person.profile_id ? (person.email ?? email) : email).trim().toLowerCase()
+      const res = await generatePersonLoginLink(person, targetEmail)
+      setLink({ url: res.action_link, existing: res.existing })
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The link could not be generated')
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -647,25 +698,72 @@ function LoginCard({
       {person.profile_id ? (
         <>
           <p className="text-[12px] text-stone-700 leading-relaxed">
-            Login active — they sign in with their email, see their own expense history and can
-            submit claims themselves.
+            Login active — they sign in at the portal with their email, see their own expense
+            history and can submit claims.
           </p>
-          <p className="text-[10.5px] text-stone-400 mt-2">
-            Forgotten password? They can reset it from the sign-in screen.
-          </p>
+          <div className="mt-3 space-y-1.5">
+            <div className="text-[10px] font-medium uppercase tracking-[.12em] text-stone-500">
+              Portal address
+            </div>
+            <CopyField value={portalUrl} label="portal-address" />
+          </div>
+          {isAdmin ? (
+            <div className="mt-3">
+              {link ? (
+                <div className="space-y-1.5">
+                  <div className="text-[10px] font-medium uppercase tracking-[.12em] text-stone-500">
+                    One-time set-password link
+                  </div>
+                  <CopyField value={link.url} label="signin-link" />
+                  <p className="text-[10.5px] text-stone-500">
+                    Single-use and short-lived — send it however you like. Generate a fresh one if
+                    it expires before they use it.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full"
+                    disabled={busy !== null}
+                    onClick={() => void getLink()}
+                  >
+                    {busy === 'link' ? 'Generating…' : 'Get a set-password link to send yourself'}
+                  </Button>
+                  <p className="text-[10.5px] text-stone-400 mt-1.5">
+                    No email goes out — you copy the link and pass it on. Handy for a first sign-in
+                    or a forgotten password.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : null}
         </>
-      ) : sent ? (
+      ) : sentEmail ? (
         <p className="text-[12px] text-mint-900 leading-relaxed">
           Invite sent — they choose a password from the email link, and their expense history is
           already waiting for them.
         </p>
+      ) : link ? (
+        <div className="space-y-1.5">
+          <p className="text-[12px] text-stone-700 leading-relaxed">
+            {link.existing
+              ? 'This email already had a login — it is now linked to this person. Send them the set-password link below.'
+              : 'Login created — nothing was emailed. Send them this link to choose their password:'}
+          </p>
+          <CopyField value={link.url} label="signin-link" />
+          <p className="text-[10.5px] text-stone-500">
+            Single-use and short-lived. Once they are set up they sign in at {portalUrl}.
+          </p>
+        </div>
       ) : isAdmin ? (
         <>
           <p className="text-[12px] text-stone-500 leading-relaxed mb-3">
             No login yet. Create one so they can see their expense history and submit claims —
-            they set their own password from the invite email.
+            invite them by email, or take a link and send it yourself.
           </p>
-          <Field label="Invite email">
+          <Field label="Email for the login">
             <Input
               type="email"
               value={email}
@@ -673,13 +771,23 @@ function LoginCard({
               placeholder="name@example.org"
             />
           </Field>
-          <Button
-            className="w-full mt-3"
-            disabled={busy || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())}
-            onClick={() => void invite()}
-          >
-            {busy ? 'Sending…' : 'Create login & send invite'}
-          </Button>
+          <div className="space-y-2 mt-3">
+            <Button
+              className="w-full"
+              disabled={busy !== null || !emailValid}
+              onClick={() => void getLink()}
+            >
+              {busy === 'link' ? 'Generating…' : 'Create login — copy a link to send yourself'}
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full"
+              disabled={busy !== null || !emailValid}
+              onClick={() => void inviteByEmail()}
+            >
+              {busy === 'email' ? 'Sending…' : 'Or send the invite email instead'}
+            </Button>
+          </div>
         </>
       ) : (
         <p className="text-[12px] text-stone-500 leading-relaxed">

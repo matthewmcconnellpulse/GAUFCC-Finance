@@ -98,6 +98,23 @@ export async function createPersonLogin(person: Person, email: string): Promise<
   })
 }
 
+/**
+ * Create-or-link a login and get a copyable sign-in link WITHOUT any email
+ * being sent — Pulse passes the link on through their own channel. If the
+ * email already has a login, the person is linked to it and a set-password
+ * link comes back instead. Pulse admin only.
+ */
+export async function generatePersonLoginLink(
+  person: Person,
+  email: string,
+): Promise<{ action_link: string; existing: boolean }> {
+  return invokeFunction('person-login-link', {
+    person_id: person.id,
+    email,
+    full_name: `${person.first_name} ${person.last_name}`.trim(),
+  })
+}
+
 export async function fetchSubmissions(personId: string): Promise<OnboardingSubmission[]> {
   const { data, error } = await supabase
     .from('onboarding_submissions')
