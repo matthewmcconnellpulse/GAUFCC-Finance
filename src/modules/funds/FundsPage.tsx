@@ -58,7 +58,7 @@ const TYPE_LABELS: Record<FundType, string> = {
 
 export default function FundsPage() {
   const navigate = useNavigate()
-  const { isPulse } = usePermissions()
+  const { isPulse, isTrustee } = usePermissions()
   const [view, setView] = useState<ViewMode>('register')
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [search, setSearch] = useState('')
@@ -118,11 +118,13 @@ export default function FundsPage() {
         <PageHeader title="Funds" subtitle="The Assembly's funds, live from Xero tracking categories" />
         <Card>
           <EmptyState
-            title="No funds yet"
+            title={isTrustee ? 'No funds are linked to you yet' : 'No funds yet'}
             hint={
               isPulse
                 ? 'Funds appear here after the first Xero sync. Connect Xero under Settings, then use Refresh now in the top bar.'
-                : 'Once Pulse connects Xero and runs the first sync, the funds you can see will appear here.'
+                : isTrustee
+                  ? 'Trustees see the funds Pulse links to them — ask Pulse to assign your funds (or whole-board access) and they will appear here.'
+                  : 'Once Pulse connects Xero and runs the first sync, the funds you can see will appear here.'
             }
             action={
               isPulse ? (
