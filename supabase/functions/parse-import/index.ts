@@ -1,6 +1,7 @@
 /**
  * parse-import — parse an uploaded HSBC statement (CSV deterministic,
- * PDF via Claude) or an Epworth investment report (via Claude).
+ * PDF via Claude) or an Epworth investment report (xlsx/xls deterministic
+ * via SheetJS, PDF/CSV via Claude as a fallback for other layouts).
  *
  * JWT-verified; pulse_* roles only. Body { kind, storage_path } within the
  * 'imports' bucket.
@@ -9,12 +10,22 @@
  * - hsbc_csv / hsbc_pdf → { rows, opening_balance?, closing_balance?,
  *   statement_start?, statement_end? }
  * - epworth → { period: 'YYYY-MM', holdings: [{ holding_ref, holding_name,
- *   income_type, amount }] }
+ *   income_type, amount }], meta: { source, cumulative_gains, gains_note,
+ *   prior_period?, excluded_cash, cash_rows } }
+ *
+ * Epworth monthly workbooks carry a cumulative gain/loss per portfolio
+ * account (since Epworth's opening valuation), not a monthly figure — the
+ * month's unrealised movement is derived as the delta against the previous
+ * import's stored cumulative gains, less the month's income net of fees.
+ * meta.cumulative_gains is persisted in epworth_imports.parsed so the next
+ * import can do the same.
  *
  * Note: Sonnet 5 rejects non-default sampling parameters, so the PDF
  * extraction asks for determinism in the prompt instead of temperature 0.
  */
 
+import * as XLSX from 'npm:xlsx@0.18.5'
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2'
 import { handleOptions, json, errorResponse } from '../_shared/http.ts'
 import { getCaller, callerHasRole, serviceClient } from '../_shared/auth.ts'
 import {
@@ -43,7 +54,7 @@ interface StatementResult {
   statement_end?: string
 }
 
-const INCOME_TYPES = ['realised_gain', 'unrealised_gain', 'interest', 'dividend'] as const
+const INCOME_TYPES = ['realised_gain', 'unrealised_gain', 'interest', 'dividend', 'fee'] as const
 type IncomeType = (typeof INCOME_TYPES)[number]
 
 function round2(n: number): number {
@@ -406,12 +417,12 @@ Respond with ONLY a JSON object, no markdown:
     {
       "holding_ref": "the holding's reference/account code as printed",
       "holding_name": "the holding or fund name as printed",
-      "income_type": one of "realised_gain" | "unrealised_gain" | "interest" | "dividend",
-      "amount": number — pounds, negative for losses
+      "income_type": one of "realised_gain" | "unrealised_gain" | "interest" | "dividend" | "fee",
+      "amount": number — pounds, negative for losses and fees
     }
   ]
 }
-Emit one entry per holding per income type that appears (a holding with both a dividend and an unrealised gain becomes two entries). Omit zero rows only if they are not printed.`
+Emit one entry per holding per income type that appears (a holding with both a dividend and an unrealised gain becomes two entries). Management/platform fees are income_type "fee" with a NEGATIVE amount. Omit zero rows only if they are not printed.`
 
 interface RawEpworth {
   period?: unknown
@@ -421,6 +432,7 @@ interface RawEpworth {
 function normaliseIncomeType(value: unknown): IncomeType | null {
   const s = String(value ?? '').toLowerCase().trim().replace(/[\s-]+/g, '_')
   if ((INCOME_TYPES as readonly string[]).includes(s)) return s as IncomeType
+  if (s.includes('fee') || s.includes('charge')) return 'fee'
   if (s.includes('unreal')) return 'unrealised_gain'
   if (s.includes('real')) return 'realised_gain'
   if (s.includes('interest')) return 'interest'
@@ -465,6 +477,359 @@ function normaliseEpworth(raw: RawEpworth): {
     throw new Error('No holdings could be extracted from this report')
   }
   return { period, holdings }
+}
+
+// ── Epworth workbook (xlsx/xls) — deterministic parsing ─────────────────────
+//
+// The monthly workbook Epworth send has (sheet names may drift slightly, so
+// they are matched loosely):
+// - 'DSC - Transactions': one row per cash movement on each discretionary
+//   portfolio account — dividends/interest in, management & platform fees out
+//   (amounts already signed).
+// - 'Gains_Losses Inc Cash (adj)': one row per account with the CUMULATIVE
+//   gain/loss since Epworth's opening valuation (Close − Open − Injections).
+// - 'Epworth Cash Plus Fund Accounts': deposit-fund statements; 'Interest'
+//   and 'Subscription' credits are the month's distribution, transfers and
+//   redemptions are capital movements (excluded, surfaced in meta).
+
+/** Thrown when the spreadsheet doesn't look like an Epworth monthly workbook. */
+class LayoutError extends Error {}
+
+type Grid = (string | number | boolean | null)[][]
+
+function sheetGrid(ws: XLSX.WorkSheet): Grid {
+  return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null }) as Grid
+}
+
+function cellText(v: unknown): string {
+  return v == null ? '' : String(v).trim()
+}
+
+function cellNumber(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  const s = cellText(v).replace(/[£,\s]/g, '')
+  if (!s) return null
+  const n = Number(s)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Excel serial / JS Date / date string → ISO date. */
+function cellToIso(v: unknown): string | null {
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    return validIso(v.getUTCFullYear(), v.getUTCMonth() + 1, v.getUTCDate())
+  }
+  if (typeof v === 'number' && Number.isFinite(v) && v > 20000 && v < 80000) {
+    // Excel 1900 date system: serial 25569 = 1970-01-01.
+    const d = new Date(Math.round((v - 25569) * 86_400_000))
+    return validIso(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate())
+  }
+  if (typeof v === 'string') return parseUkDate(v)
+  return null
+}
+
+/** First row (within the top 12) where every regex matches some cell. */
+function findHeaderRow(grid: Grid, tests: RegExp[]): number {
+  for (let i = 0; i < Math.min(grid.length, 12); i++) {
+    const cells = grid[i].map(cellText)
+    if (tests.every((re) => cells.some((c) => re.test(c)))) return i
+  }
+  return -1
+}
+
+function findSheet(wb: XLSX.WorkBook, ...tests: RegExp[]): XLSX.WorkSheet | null {
+  const name = wb.SheetNames.find((n) => tests.every((re) => re.test(n)))
+  return name ? wb.Sheets[name] : null
+}
+
+/** 'General Assembly of Unitarians – Growth & Development Fund' → the fund part. */
+function shortAccountName(name: string): string {
+  const parts = name.split(/\s+[–—]\s+/)
+  return (parts[parts.length - 1] || name).trim()
+}
+
+/** Loose key for matching gains-sheet names to transaction-sheet names. */
+function nameKey(name: string): string {
+  return name.toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim()
+}
+
+/** DSC transaction sub-types → posting type; capital movements are excluded. */
+function classifySubType(s: string): IncomeType | 'capital' | null {
+  const t = s.toLowerCase()
+  if (!t) return null
+  if (/fee|charge/.test(t)) return 'fee'
+  if (/unrealised|unrealized/.test(t)) return 'unrealised_gain'
+  if (/realised|realized/.test(t)) return 'realised_gain'
+  if (/interest/.test(t)) return 'interest'
+  if (/dividend|distribution/.test(t)) return 'dividend'
+  if (/purchase|sale|buy|sell|transfer|redemption|subscription|injection|withdraw|switch|deposit/.test(t)) {
+    return 'capital'
+  }
+  return null
+}
+
+interface EpworthHolding {
+  holding_ref: string
+  holding_name: string
+  income_type: IncomeType
+  amount: number
+}
+
+interface EpworthCashRow {
+  date: string
+  amount: number
+  description: string
+  reference: string
+}
+
+interface ExcludedCash {
+  account_ref: string
+  date: string
+  narrative: string
+  amount: number
+}
+
+interface EpworthWorkbook {
+  period: string
+  holdings: EpworthHolding[]
+  /** account ref → cumulative gain/loss since Epworth inception */
+  cumulativeGains: Record<string, number>
+  /** account ref → this month's dividends + interest + fees (fees negative) */
+  netIncomeByRef: Record<string, number>
+  nameByRef: Record<string, string>
+  excludedCash: ExcludedCash[]
+  cashRows: EpworthCashRow[]
+}
+
+function parseEpworthWorkbook(wb: XLSX.WorkBook): EpworthWorkbook {
+  // 1. DSC transactions — the month's dividends, interest and fees.
+  const txSheet = findSheet(wb, /transaction/i)
+  if (!txSheet) throw new LayoutError('No transactions sheet found in this workbook')
+  const grid = sheetGrid(txSheet)
+  const headerIdx = findHeaderRow(grid, [/account.?id/i, /amount/i, /date/i])
+  if (headerIdx === -1) {
+    throw new LayoutError('Could not find the transaction sheet header row')
+  }
+  const header = grid[headerIdx].map(cellText)
+  const col = (re: RegExp) => header.findIndex((c) => re.test(c))
+  const cAcct = col(/account.?id/i)
+  const cName = col(/account.?name/i)
+  const cDate = col(/date/i)
+  const cSub = col(/sub.?_?type/i) !== -1 ? col(/sub.?_?type/i) : col(/type/i)
+  const cAsset = col(/asset/i)
+  const cAmt = col(/^amount/i)
+  if (cAcct === -1 || cDate === -1 || cSub === -1 || cAmt === -1) {
+    throw new LayoutError('The transaction sheet is missing expected columns')
+  }
+
+  interface Tx {
+    ref: string
+    name: string
+    date: string
+    sub: string
+    asset: string
+    amount: number
+  }
+  const txs: Tx[] = []
+  const nameByRef: Record<string, string> = {}
+  for (let i = headerIdx + 1; i < grid.length; i++) {
+    const row = grid[i]
+    const ref = cellText(row[cAcct])
+    const date = cellToIso(row[cDate])
+    const amount = cellNumber(row[cAmt])
+    if (!ref || !date || amount === null) continue
+    const name = cName !== -1 ? cellText(row[cName]) : ''
+    if (name && !nameByRef[ref]) nameByRef[ref] = name
+    txs.push({
+      ref,
+      name: name || ref,
+      date,
+      sub: cellText(row[cSub]),
+      asset: cAsset !== -1 ? cellText(row[cAsset]) : '',
+      amount: round2(amount),
+    })
+  }
+  if (txs.length === 0) throw new LayoutError('No transactions found in this workbook')
+
+  // The reporting period is the latest month present; older rows (some sheets
+  // carry history) are ignored for the totals.
+  const period = txs.reduce((max, t) => (t.date > max ? t.date : max), txs[0].date).slice(0, 7)
+  const inPeriod = (iso: string) => iso.startsWith(period)
+
+  const totals = new Map<string, number>() // `${ref}|${type}` → amount
+  const excludedCash: ExcludedCash[] = []
+  const cashRows: EpworthCashRow[] = []
+  for (const t of txs) {
+    if (!inPeriod(t.date)) continue
+    const type = classifySubType(t.sub)
+    if (type === 'capital' || type === null) {
+      excludedCash.push({ account_ref: t.ref, date: t.date, narrative: t.sub || 'Unrecognised', amount: t.amount })
+      continue
+    }
+    const key = `${t.ref}|${type}`
+    totals.set(key, round2((totals.get(key) ?? 0) + t.amount))
+    cashRows.push({
+      date: t.date,
+      amount: t.amount,
+      description: `${shortAccountName(t.name)}: ${t.sub}${t.asset ? ` — ${t.asset}` : ''}`,
+      reference: t.ref,
+    })
+  }
+
+  // 2. Cash Plus deposit accounts — Interest/Subscription credits are the
+  // month's distribution; transfers/redemptions are capital movements.
+  const cashSheet = findSheet(wb, /cash\s*plus/i)
+  if (cashSheet) {
+    const cg = sheetGrid(cashSheet)
+    const ch = findHeaderRow(cg, [/narrative/i, /date/i])
+    if (ch !== -1) {
+      const chead = cg[ch].map(cellText)
+      const ccol = (re: RegExp) => chead.findIndex((c) => re.test(c))
+      const kRef = ccol(/ref/i)
+      const kDate = ccol(/date/i)
+      const kNarr = ccol(/narrative/i)
+      const kVal = ccol(/value|amount/i)
+      if (kRef !== -1 && kDate !== -1 && kNarr !== -1 && kVal !== -1) {
+        for (let i = ch + 1; i < cg.length; i++) {
+          const row = cg[i]
+          const ref = cellText(row[kRef])
+          const date = cellToIso(row[kDate])
+          const amount = cellNumber(row[kVal])
+          if (!ref || !date || amount === null || !inPeriod(date)) continue
+          const narrative = cellText(row[kNarr])
+          const holdingName = `Epworth Cash Plus ${ref}`
+          if (/interest|subscription/i.test(narrative)) {
+            // Subscription credits are the deposit fund's distribution
+            // reinvested as units — income, posted as interest.
+            const key = `${ref}|interest`
+            totals.set(key, round2((totals.get(key) ?? 0) + amount))
+            if (!nameByRef[ref]) nameByRef[ref] = holdingName
+            cashRows.push({ date, amount: round2(amount), description: `${holdingName}: ${narrative}`, reference: ref })
+          } else {
+            excludedCash.push({ account_ref: ref, date, narrative: narrative || 'Unrecognised', amount: round2(amount) })
+          }
+        }
+      }
+    }
+  }
+
+  const holdings: EpworthHolding[] = []
+  const netIncomeByRef: Record<string, number> = {}
+  for (const [key, amount] of totals) {
+    if (amount === 0) continue
+    const [ref, type] = key.split('|')
+    holdings.push({
+      holding_ref: ref,
+      holding_name: nameByRef[ref] ?? ref,
+      income_type: type as IncomeType,
+      amount,
+    })
+    netIncomeByRef[ref] = round2((netIncomeByRef[ref] ?? 0) + amount)
+  }
+
+  // 3. Gains sheet — cumulative gain/loss per account. Prefer the '(adj)'
+  // variant (its Gain/Loss is net of capital injections).
+  const gainsSheet = findSheet(wb, /gain/i, /adj/i) ?? findSheet(wb, /gain/i)
+  const cumulativeGains: Record<string, number> = {}
+  if (gainsSheet) {
+    const gg = sheetGrid(gainsSheet)
+    const gh = findHeaderRow(gg, [/gain/i])
+    if (gh !== -1) {
+      const ghead = gg[gh].map(cellText)
+      const gGain = ghead.findIndex((c) => /gain/i.test(c))
+      const refByName = new Map<string, string>()
+      for (const [ref, name] of Object.entries(nameByRef)) refByName.set(nameKey(name), ref)
+      for (let i = gh + 1; i < gg.length; i++) {
+        const row = gg[i]
+        const name = cellText(row[0])
+        if (!name || /^total/i.test(name)) continue
+        const gain = cellNumber(row[gGain])
+        if (gain === null) continue
+        const ref = refByName.get(nameKey(name)) ?? name
+        cumulativeGains[ref] = round2(gain)
+      }
+    }
+  }
+
+  return { period, holdings, cumulativeGains, netIncomeByRef, nameByRef, excludedCash, cashRows }
+}
+
+interface PriorImport {
+  period: string
+  gains: Record<string, number>
+}
+
+/** Latest earlier import whose stored meta carries cumulative gains. */
+async function findPriorImport(svc: SupabaseClient, period: string): Promise<PriorImport | null> {
+  const { data } = await svc
+    .from('epworth_imports')
+    .select('period, parsed, created_at')
+    .lt('period', period)
+    .order('period', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(10)
+  for (const row of data ?? []) {
+    const meta = (row.parsed as { meta?: { cumulative_gains?: unknown } } | null)?.meta
+    const gains = meta?.cumulative_gains
+    if (gains && typeof gains === 'object' && Object.keys(gains).length > 0) {
+      const clean: Record<string, number> = {}
+      for (const [k, v] of Object.entries(gains as Record<string, unknown>)) {
+        const n = typeof v === 'number' ? v : Number(v)
+        if (Number.isFinite(n)) clean[k] = n
+      }
+      if (Object.keys(clean).length > 0) return { period: row.period as string, gains: clean }
+    }
+  }
+  return null
+}
+
+/**
+ * Derive the month's unrealised-gain movement per account and assemble the
+ * final response. Workbook gains are cumulative since Epworth's opening
+ * valuation, so: movement = Δcumulative (vs the prior import) − the month's
+ * income net of fees (income received sits in the account's cash and is
+ * already inside the cumulative figure).
+ */
+function finaliseEpworth(parsed: EpworthWorkbook, prior: PriorImport | null) {
+  const holdings = [...parsed.holdings]
+  for (const [ref, cum] of Object.entries(parsed.cumulativeGains)) {
+    const prev = prior ? (prior.gains[ref] ?? 0) : 0
+    const net = parsed.netIncomeByRef[ref] ?? 0
+    const amount = round2(cum - prev - net)
+    if (amount === 0) continue
+    holdings.push({
+      holding_ref: ref,
+      holding_name: parsed.nameByRef[ref] ?? ref,
+      income_type: 'unrealised_gain',
+      amount,
+    })
+  }
+
+  const gains_note = prior
+    ? `Unrealised gains are the movement in Epworth's cumulative gain/loss since the ${prior.period} import, less the month's income net of fees.`
+    : `First Epworth import — no earlier import to diff against, so the unrealised gains are the CUMULATIVE gain/loss since Epworth's opening valuation (less this month's income net of fees). Check what is already on the books for earlier months before posting; future imports will show the monthly movement automatically.`
+
+  return {
+    period: parsed.period,
+    holdings,
+    meta: {
+      source: 'workbook' as const,
+      cumulative_gains: parsed.cumulativeGains,
+      gains_note,
+      ...(prior ? { prior_period: prior.period } : {}),
+      excluded_cash: parsed.excludedCash,
+      cash_rows: parsed.cashRows,
+    },
+  }
+}
+
+/** Flatten a workbook to labelled CSV text for the Claude fallback. */
+function workbookToText(wb: XLSX.WorkBook): string {
+  const parts: string[] = []
+  for (const name of wb.SheetNames) {
+    parts.push(`=== Sheet: ${name} ===`)
+    parts.push(XLSX.utils.sheet_to_csv(wb.Sheets[name]))
+  }
+  return parts.join('\n').slice(0, 150_000)
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -529,7 +894,39 @@ Deno.serve(async (req) => {
       return json(normaliseStatement(extractJson<RawStatement>(text)))
     }
 
-    // epworth — PDF via document block, CSV/text inline.
+    // epworth — xlsx/xls deterministic (Claude fallback on unfamiliar
+    // layouts), PDF via document block, CSV/text inline.
+    const ext = storagePath.slice(storagePath.lastIndexOf('.') + 1).toLowerCase()
+    if (ext === 'xlsx' || ext === 'xls') {
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      let wb: XLSX.WorkBook
+      try {
+        wb = XLSX.read(bytes, { type: 'array' })
+      } catch {
+        return errorResponse('Could not read this spreadsheet — is it a valid Excel file?', 422)
+      }
+      try {
+        const parsed = parseEpworthWorkbook(wb)
+        const prior = await findPriorImport(svc, parsed.period)
+        return json(finaliseEpworth(parsed, prior))
+      } catch (e) {
+        if (!(e instanceof LayoutError)) throw e
+        console.warn('[parse-import] epworth workbook layout not recognised, falling back to Claude:', e.message)
+        const text = await callClaude({
+          system: EPWORTH_SYSTEM,
+          maxTokens: 16000,
+          messages: [
+            {
+              role: 'user',
+              content: `Here is the Epworth report, one CSV block per spreadsheet tab:\n\n${workbookToText(wb)}\n\nRespond with only the JSON object.`,
+            },
+          ],
+        })
+        const result = normaliseEpworth(extractJson<RawEpworth>(text))
+        return json({ ...result, meta: { source: 'ai' } })
+      }
+    }
+
     const mediaType = resolveMediaType(storagePath, blob.type)
     let text: string
     if (mediaType === 'application/pdf') {
@@ -553,7 +950,8 @@ Deno.serve(async (req) => {
         ],
       })
     }
-    return json(normaliseEpworth(extractJson<RawEpworth>(text)))
+    const result = normaliseEpworth(extractJson<RawEpworth>(text))
+    return json({ ...result, meta: { source: 'ai' } })
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Import parsing failed'
     console.error('[parse-import]', message)

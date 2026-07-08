@@ -45,7 +45,7 @@ export type ImportStatus =
   | 'exported'
   | 'overridden'
 
-export type IncomeType = 'realised_gain' | 'unrealised_gain' | 'interest' | 'dividend'
+export type IncomeType = 'realised_gain' | 'unrealised_gain' | 'interest' | 'dividend' | 'fee'
 
 export type SyncTrigger = 'cron' | 'manual'
 

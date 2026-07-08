@@ -63,13 +63,15 @@ export function rowKey(row: Pick<BankImportRow, 'date' | 'amount' | 'description
   return `${row.date}|${row.amount.toFixed(2)}|${normaliseDescription(row.description)}`
 }
 
-export function validateImportFile(file: File, kinds: Array<'pdf' | 'csv'>): string | null {
+export type ImportFileKind = 'pdf' | 'csv' | 'xlsx' | 'xls'
+
+export function validateImportFile(file: File, kinds: ImportFileKind[]): string | null {
   if (file.size === 0) return 'That file is empty.'
   if (file.size > MAX_FILE_BYTES) {
     return `That file is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is 10 MB. Export a shorter period and try again.`
   }
   const ext = fileExtension(file.name)
-  if (!kinds.includes(ext as 'pdf' | 'csv')) {
+  if (!kinds.includes(ext as ImportFileKind)) {
     return `Only ${kinds.map((k) => k.toUpperCase()).join(' or ')} files can be imported here.`
   }
   return null
@@ -135,6 +137,33 @@ export interface ParsedHolding {
   amount: number
 }
 
+/** A period cash movement from the Epworth workbook, ready for a bank-statement CSV. */
+export interface EpworthCashRow {
+  date: string // ISO
+  amount: number // signed, money-in positive
+  description: string
+  reference: string
+}
+
+/**
+ * Epworth workbook context stored alongside the holdings in
+ * epworth_imports.parsed. cumulative_gains lets the *next* import compute the
+ * month's unrealised movement as a delta; gains_note explains the basis used.
+ */
+export interface EpworthImportMeta {
+  source?: 'workbook' | 'ai'
+  /** holding_ref → cumulative gain/loss since Epworth inception (Gains sheet) */
+  cumulative_gains?: Record<string, number>
+  /** basis of the unrealised_gain figures — delta vs prior import, or catch-up */
+  gains_note?: string
+  /** period of the prior import the gains delta was computed against */
+  prior_period?: string
+  /** capital movements (transfers in/out, redemptions) excluded from income */
+  excluded_cash?: Array<{ account_ref: string; date: string; narrative: string; amount: number }>
+  /** the period's actual cash movements, for the cash-account CSV export */
+  cash_rows?: EpworthCashRow[]
+}
+
 export interface ParseImportResponse {
   rows?: BankImportRow[]
   opening_balance?: number
@@ -143,6 +172,7 @@ export interface ParseImportResponse {
   statement_end?: string
   holdings?: ParsedHolding[]
   period?: string
+  meta?: EpworthImportMeta
 }
 
 export async function parseImport(
@@ -202,7 +232,7 @@ export interface NewEpworthImport {
   file_path: string
   file_name: string
   period: string
-  parsed: { holdings: ParsedHolding[] }
+  parsed: { holdings: ParsedHolding[]; meta?: EpworthImportMeta }
   uploaded_by: string
 }
 
@@ -267,6 +297,13 @@ export function holdingsOf(imp: EpworthImport): ParsedHolding[] {
   return out
 }
 
+/** Extract the workbook meta from an epworth_imports row (jsonb, defensive). */
+export function metaOf(imp: EpworthImport): EpworthImportMeta {
+  const raw = imp.parsed as { meta?: unknown } | null
+  const meta = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as { meta?: unknown }).meta : null
+  return meta && typeof meta === 'object' ? (meta as EpworthImportMeta) : {}
+}
+
 // ── Fund options (from v_fund_balances) ──────────────────────────────────────
 
 export interface FundOption {
@@ -286,15 +323,49 @@ export async function fetchFundOptions(): Promise<FundOption[]> {
     .map(({ fund_id, name, fund_type }) => ({ fund_id, name, fund_type }))
 }
 
+/**
+ * Name of the Xero tracking category the funds live under (category 1 on the
+ * journal CSV). Resolved via any fund's tracking option; null when Xero has
+ * not been synced yet — the caller falls back to a sensible default.
+ */
+export async function fetchFundTrackingCategoryName(): Promise<string | null> {
+  const { data: fund } = await supabase
+    .from('funds')
+    .select('tracking_option_id')
+    .not('tracking_option_id', 'is', null)
+    .limit(1)
+    .maybeSingle()
+  if (!fund?.tracking_option_id) return null
+  const { data: opt } = await supabase
+    .from('xero_tracking_options')
+    .select('tracking_category_id')
+    .eq('tracking_option_id', fund.tracking_option_id)
+    .maybeSingle()
+  if (!opt?.tracking_category_id) return null
+  const { data: cat } = await supabase
+    .from('xero_tracking_categories')
+    .select('name')
+    .eq('tracking_category_id', opt.tracking_category_id)
+    .maybeSingle()
+  return cat?.name ?? null
+}
+
 // ── Income types ─────────────────────────────────────────────────────────────
 
-export const INCOME_TYPES: IncomeType[] = ['dividend', 'interest', 'realised_gain', 'unrealised_gain']
+export const INCOME_TYPES: IncomeType[] = [
+  'dividend',
+  'interest',
+  'realised_gain',
+  'unrealised_gain',
+  'fee',
+]
 
 export const INCOME_TYPE_LABELS: Record<IncomeType, string> = {
   dividend: 'Dividends',
   interest: 'Interest',
   realised_gain: 'Realised gains',
   unrealised_gain: 'Unrealised gains',
+  fee: 'Management fees',
 }
 
 export const INCOME_TYPE_SHORT: Record<IncomeType, string> = {
@@ -302,12 +373,14 @@ export const INCOME_TYPE_SHORT: Record<IncomeType, string> = {
   interest: 'Interest',
   realised_gain: 'Realised',
   unrealised_gain: 'Unrealised',
+  fee: 'Fees',
 }
 
 /** Coerce whatever the parser called the income type onto the enum. */
 export function coerceIncomeType(raw: string): IncomeType {
   const s = raw.toLowerCase().trim()
   if ((INCOME_TYPES as string[]).includes(s)) return s as IncomeType
+  if (s.includes('fee') || s.includes('charge')) return 'fee'
   if (s.includes('unreal')) return 'unrealised_gain'
   if (s.includes('real')) return 'realised_gain'
   if (s.includes('int')) return 'interest'

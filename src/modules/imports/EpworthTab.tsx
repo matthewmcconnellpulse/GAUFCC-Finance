@@ -1,10 +1,15 @@
 /**
- * Epworth monthly investment report — upload, parse holdings via the
- * parse-import edge function, map holdings to funds (mappings are remembered
- * month to month in epworth_fund_mappings; only unmapped lines surface
- * loudly), review totals by fund × income type, and export a manual-journal
- * CSV plus a plain posting summary for the bookkeeper. Nothing is pushed to
- * Xero by the platform.
+ * Epworth monthly investment report — upload (the monthly xlsx workbook is
+ * parsed deterministically; PDF/CSV via Claude), map holdings to funds
+ * (mappings are remembered month to month in epworth_fund_mappings; only
+ * unmapped lines surface loudly), review totals by fund × income type, and
+ * export either a Xero manual-journal CSV (tracked per fund) or a cash-account
+ * statement CSV, plus a plain posting summary. Nothing is pushed to Xero by
+ * the platform.
+ *
+ * Unrealised gains: the workbook reports gains cumulatively since Epworth's
+ * opening valuation, so the month's movement is derived against the previous
+ * import — the basis is spelled out in the note that accompanies each parse.
  */
 import { useMemo, useState } from 'react'
 import { useAuth } from '@/auth/AuthProvider'
@@ -31,11 +36,13 @@ import {
   deleteMappingsForHolding,
   fetchEpworthImports,
   fetchFundOptions,
+  fetchFundTrackingCategoryName,
   fetchMappings,
   holdingsOf,
   importFilePath,
   insertEpworthImport,
   insertMappings,
+  metaOf,
   parseImport,
   periodEndIso,
   round2,
@@ -46,6 +53,7 @@ import {
   type UploadPhase,
 } from './lib'
 import {
+  buildEpworthCashCsv,
   buildEpworthJournalCsv,
   buildPostingSummaryCsv,
   downloadTextFile,
@@ -72,7 +80,7 @@ interface HoldingGroup {
 }
 
 function emptyAmounts(): Record<IncomeType, number> {
-  return { dividend: 0, interest: 0, realised_gain: 0, unrealised_gain: 0 }
+  return { dividend: 0, interest: 0, realised_gain: 0, unrealised_gain: 0, fee: 0 }
 }
 
 function groupHoldings(imp: EpworthImport): HoldingGroup[] {
@@ -227,6 +235,7 @@ export default function EpworthTab() {
   const importsQ = useSupabaseQuery(fetchEpworthImports)
   const mappingsQ = useSupabaseQuery(fetchMappings)
   const fundsQ = useSupabaseQuery(fetchFundOptions)
+  const trackingNameQ = useSupabaseQuery(fetchFundTrackingCategoryName)
 
   const [activeId, setActiveId] = useState<string | null>(null)
   const [phase, setPhase] = useState<UploadPhase | null>(null)
@@ -237,11 +246,13 @@ export default function EpworthTab() {
   // the bookkeeper to fill or adapt after download.
   const [narration, setNarration] = useState<string | null>(null)
   const [assetCode, setAssetCode] = useState('')
+  const [trackingName, setTrackingName] = useState<string | null>(null)
   const [incomeCodes, setIncomeCodes] = useState<Record<IncomeType, string>>({
     dividend: '',
     interest: '',
     realised_gain: '',
     unrealised_gain: '',
+    fee: '',
   })
 
   const imports = importsQ.data ?? []
@@ -259,10 +270,12 @@ export default function EpworthTab() {
 
   const defaultNarration = active ? `Epworth investment income — ${formatPeriod(active.period)}` : ''
   const narrationValue = narration ?? defaultNarration
+  const trackingNameValue = trackingName ?? trackingNameQ.data ?? 'Fund'
+  const activeMeta = useMemo(() => (active ? metaOf(active) : {}), [active])
 
   async function handleFile(file: File) {
     setError(null)
-    const invalid = validateImportFile(file, ['pdf', 'csv'])
+    const invalid = validateImportFile(file, ['xlsx', 'xls', 'pdf', 'csv'])
     if (invalid) {
       setError(invalid)
       return
@@ -293,7 +306,7 @@ export default function EpworthTab() {
         file_path: path,
         file_name: file.name,
         period: coercePeriod(resp.period),
-        parsed: { holdings },
+        parsed: resp.meta ? { holdings, meta: resp.meta } : { holdings },
         uploaded_by: profile.id,
       })
       setActiveId(row.id)
@@ -369,17 +382,31 @@ export default function EpworthTab() {
         narration: narrationValue,
         dateIso: periodEndIso(active.period),
         assetAccountCode: assetCode.trim(),
-        incomeAccountCodes: {
-          dividend: incomeCodes.dividend.trim(),
-          interest: incomeCodes.interest.trim(),
-          realised_gain: incomeCodes.realised_gain.trim(),
-          unrealised_gain: incomeCodes.unrealised_gain.trim(),
-        },
+        incomeAccountCodes: Object.fromEntries(
+          INCOME_TYPES.map((t) => [t, incomeCodes[t].trim()]),
+        ) as Record<IncomeType, string>,
+        trackingCategoryName: trackingNameValue.trim() || 'Fund',
       })
       downloadTextFile(`epworth-journal-${active.period}.csv`, csv)
       await markExported()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The journal CSV could not be generated.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleExportCash() {
+    if (!active) return
+    const rows = activeMeta.cash_rows ?? []
+    if (rows.length === 0) return
+    setBusy(true)
+    setError(null)
+    try {
+      downloadTextFile(`epworth-cash-statement-${active.period}.csv`, buildEpworthCashCsv(rows))
+      await markExported()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The cash statement CSV could not be generated.')
     } finally {
       setBusy(false)
     }
@@ -419,8 +446,8 @@ export default function EpworthTab() {
         <div className="space-y-3">
           <FileDrop
             title="Drop the Epworth monthly report"
-            hint="The valuation and income report, PDF or CSV, up to 10 MB. Holdings are parsed and matched to remembered fund mappings."
-            accept=".pdf,.csv,application/pdf,text/csv"
+            hint="The monthly workbook (xlsx/xls) is read directly — transactions, gains and Cash Plus accounts. PDF or CSV also works. Up to 10 MB."
+            accept=".xlsx,.xls,.pdf,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/pdf,text/csv"
             busyPhase={phase}
             phases={PHASES}
             onFile={(f) => void handleFile(f)}
@@ -465,6 +492,28 @@ export default function EpworthTab() {
               </div>
             </div>
 
+            {/* How the unrealised figure was derived + excluded capital movements */}
+            {activeMeta.gains_note ? (
+              <div className="rounded-lg border border-indigo/20 bg-indigo/[.04] px-4 py-3 text-[12px] text-stone-700">
+                <span className="font-medium text-indigo">Unrealised gains basis:</span>{' '}
+                {activeMeta.gains_note}
+                {(activeMeta.excluded_cash ?? []).length > 0 ? (
+                  <div className="mt-2 text-[11.5px] text-stone-600">
+                    <span className="font-medium">
+                      Capital movements excluded from income (transfers between accounts, redemptions):
+                    </span>
+                    <ul className="mt-1 space-y-0.5">
+                      {(activeMeta.excluded_cash ?? []).map((m, i) => (
+                        <li key={i} className="font-mono text-[11px]">
+                          {formatDate(m.date)} · {m.account_ref} · {m.narrative} · £{num2.format(m.amount)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Holding → fund mapping table */}
             <Card className="overflow-hidden">
               <div className="overflow-x-auto">
@@ -473,10 +522,11 @@ export default function EpworthTab() {
                     <tr>
                       <th className="th-register">Epworth holding</th>
                       <th className="th-register">Maps to fund</th>
-                      <th className="th-register text-right">Dividends</th>
-                      <th className="th-register text-right">Interest</th>
-                      <th className="th-register text-right">Realised</th>
-                      <th className="th-register text-right">Unrealised</th>
+                      {INCOME_TYPES.map((t) => (
+                        <th key={t} className="th-register text-right">
+                          {INCOME_TYPE_SHORT[t]}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -534,10 +584,11 @@ export default function EpworthTab() {
                     <thead>
                       <tr>
                         <th className="th-register">Fund</th>
-                        <th className="th-register text-right">Dividends</th>
-                        <th className="th-register text-right">Interest</th>
-                        <th className="th-register text-right">Realised</th>
-                        <th className="th-register text-right">Unrealised</th>
+                        {INCOME_TYPES.map((t) => (
+                          <th key={t} className="th-register text-right">
+                            {INCOME_TYPE_SHORT[t]}
+                          </th>
+                        ))}
                         <th className="th-register text-right">Total</th>
                       </tr>
                     </thead>
@@ -593,8 +644,14 @@ export default function EpworthTab() {
             <Card className="p-4">
               <SectionLabel>Journal export settings</SectionLabel>
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Narration" className="sm:col-span-2">
+                <Field label="Narration">
                   <Input value={narrationValue} onChange={(e) => setNarration(e.target.value)} />
+                </Field>
+                <Field
+                  label="Tracking category"
+                  hint="Xero's TrackingName1 column — the category the funds live under."
+                >
+                  <Input value={trackingNameValue} onChange={(e) => setTrackingName(e.target.value)} />
                 </Field>
                 <Field
                   label="Investment asset account code"
@@ -629,6 +686,18 @@ export default function EpworthTab() {
                 >
                   Export Xero manual journal CSV
                 </Button>
+                <Button
+                  variant="ghost"
+                  disabled={busy || (activeMeta.cash_rows ?? []).length === 0}
+                  onClick={() => void handleExportCash()}
+                  title={
+                    (activeMeta.cash_rows ?? []).length === 0
+                      ? 'Available when the report was parsed from the Epworth workbook'
+                      : undefined
+                  }
+                >
+                  Export cash-account statement CSV
+                </Button>
                 <Button variant="ghost" disabled={busy || groups.length === 0} onClick={() => void handleExportSummary()}>
                   Export posting summary CSV
                 </Button>
@@ -640,8 +709,10 @@ export default function EpworthTab() {
               </div>
               <p className="text-[11px] text-stone-500 mt-3">
                 Journal date {formatDate(periodEndIso(active.period))} · signed debit/credit pairs per fund and income
-                type, tracking category set to the fund name. Postings are generated as CSVs for the bookkeeper to
-                adapt — nothing is pushed to Xero by the platform.
+                type with TaxRate &lsquo;No VAT&rsquo;, tracked against each fund via {trackingNameValue}. The
+                cash-account statement CSV carries the month&rsquo;s actual cash movements instead (Xero bank-statement
+                format) for importing the Epworth account as a cash account. Everything is generated as CSVs for the
+                bookkeeper to adapt — nothing is pushed to Xero by the platform.
               </p>
               <p className="text-[11px] text-stone-500 mt-1.5">
                 Feed-through: investment income appears against each fund in reporting once the journal is posted in

@@ -7,6 +7,7 @@
  * Reference. Dates dd/mm/yyyy; amounts signed with money in positive.
  */
 import type { BankImportRow, IncomeType } from '@/types/db'
+import type { EpworthCashRow } from './lib'
 import { INCOME_TYPES, INCOME_TYPE_LABELS, isoToUk, round2 } from './lib'
 
 // ── Primitive CSV plumbing ───────────────────────────────────────────────────
@@ -79,23 +80,35 @@ export interface JournalSettings {
   dateIso: string
   /** debit side — investment asset account; blank = bookkeeper fills in */
   assetAccountCode: string
-  /** credit side per income type; blank = bookkeeper fills in */
+  /** counter side per income type (income accounts; fees an expense account) */
   incomeAccountCodes: Record<IncomeType, string>
+  /** Xero tracking category name the funds live under (category 1) */
+  trackingCategoryName: string
 }
 
+/**
+ * Xero's manual journal import template, exactly. TrackingName1 is the
+ * tracking CATEGORY name (e.g. 'Fund'); TrackingOption1 is the option — in
+ * this platform the fund's label IS the Xero tracking option name.
+ */
 export const EPWORTH_JOURNAL_HEADERS = [
-  'Narration',
-  'Date',
+  '*Narration',
+  '*Date',
   'Description',
-  'AccountCode',
+  '*AccountCode',
+  '*TaxRate',
+  '*Amount',
   'TrackingName1',
-  'Amount',
+  'TrackingOption1',
 ]
 
+const JOURNAL_TAX_RATE = 'No VAT'
+
 /**
- * Pragmatic posting summary the bookkeeper can adapt: for every fund × income
- * type a signed pair — debit the investment asset (+), credit the income
- * account (−). Pairs sum to zero; account codes default blank for editing.
+ * For every fund × income type a signed pair — debit the investment asset
+ * (+), credit the income account (−). Fees arrive negative, so the same pair
+ * flips into credit-asset / debit-expense. Pairs sum to zero; account codes
+ * default blank for the bookkeeper to fill in before importing.
  */
 export function buildEpworthJournalCsv(funds: FundTotalsRow[], settings: JournalSettings): string {
   const date = isoToUk(settings.dateIso)
@@ -106,18 +119,44 @@ export function buildEpworthJournalCsv(funds: FundTotalsRow[], settings: Journal
       const amount = round2(fund.amounts[type])
       if (amount === 0) continue
       const description = `${fund.label} — ${INCOME_TYPE_LABELS[type]}`
-      rows.push([settings.narration, date, description, settings.assetAccountCode, fund.label, amount])
+      rows.push([
+        settings.narration,
+        date,
+        description,
+        settings.assetAccountCode,
+        JOURNAL_TAX_RATE,
+        amount,
+        settings.trackingCategoryName,
+        fund.label,
+      ])
       rows.push([
         settings.narration,
         date,
         description,
         settings.incomeAccountCodes[type],
-        fund.label,
+        JOURNAL_TAX_RATE,
         round2(-amount),
+        settings.trackingCategoryName,
+        fund.label,
       ])
     }
   }
   return buildCsv(EPWORTH_JOURNAL_HEADERS, rows)
+}
+
+// ── Epworth → cash-account statement CSV ─────────────────────────────────────
+
+/**
+ * The same Xero bank-statement format as the HSBC export, built from the
+ * workbook's actual cash movements — for importing the Epworth account as a
+ * cash/bank account in Xero instead of posting a journal.
+ */
+export function buildEpworthCashCsv(rows: EpworthCashRow[]): string {
+  const sorted = [...rows].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return buildCsv(
+    XERO_BANK_HEADERS,
+    sorted.map((r) => [isoToUk(r.date), r.amount, '', r.description, r.reference]),
+  )
 }
 
 export const POSTING_SUMMARY_HEADERS = ['Period', 'Fund', 'Income type', 'Amount']
