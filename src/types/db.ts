@@ -152,6 +152,7 @@ export interface XeroTransaction {
     | 'CREDIT_NOTE'
     | 'PREPAYMENT'
     | 'OVERPAYMENT'
+    | 'MANJOURNAL' // manual journal (payroll etc.)
   date: string // ISO date
   account_code: string | null
   contact_id: string | null

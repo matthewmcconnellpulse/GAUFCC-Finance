@@ -51,8 +51,10 @@ by hand, and never put the service-role key anywhere else.
    - `accounting.attachments` (receipt images/PDFs ride along when an
      approved claim is pushed — they attach to the draft bill; without this
      scope the bill still pushes and the UI lists the receipts to add by hand)
-   No journals, payments or budgets scopes — the platform never posts
-   journals or payments.
+   No payments or budgets scopes, and no `accounting.journals.read` — the
+   platform never posts journals or payments. (Manual journals — payroll
+   postings — ARE mirrored read-only, but Xero serves the ManualJournals
+   endpoint under `accounting.transactions`, so no extra scope is needed.)
 4. Select the authorising user; they'll get an email to authorise the
    connection against the GAUFCC organisation.
 5. Copy the **Client ID** and generate a **Client Secret** → save both as

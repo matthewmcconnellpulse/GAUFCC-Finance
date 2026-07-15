@@ -391,6 +391,8 @@ export function xeroDeepLink(sourceType: string, xeroId: string): string {
     case 'PREPAYMENT':
     case 'OVERPAYMENT':
       return `https://go.xero.com/Bank/ViewTransaction.aspx?bankTransactionID=${id}`
+    case 'MANJOURNAL':
+      return `https://go.xero.com/Journal/View.aspx?invoiceID=${id}`
     default:
       return `https://go.xero.com/Search/Search.aspx?searchQuery=${id}`
   }
@@ -409,6 +411,7 @@ export const SOURCE_TYPE_LABELS: Record<string, string> = {
   CREDIT_NOTE: 'Credit note',
   PREPAYMENT: 'Prepayment',
   OVERPAYMENT: 'Overpayment',
+  MANJOURNAL: 'Journal',
 }
 
 export function sourceTypeLabel(sourceType: string): string {

@@ -37,6 +37,7 @@ const SOURCE_TYPES = [
   'CREDIT_NOTE',
   'PREPAYMENT',
   'OVERPAYMENT',
+  'MANJOURNAL',
 ]
 
 export default function TransactionsPage() {

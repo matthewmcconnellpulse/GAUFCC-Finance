@@ -41,6 +41,15 @@
  *     SPEND-TRANSFER / RECEIVE-TRANSFER → 'BANK_TRANSFER',
  *     *-PREPAYMENT → 'PREPAYMENT', *-OVERPAYMENT → 'OVERPAYMENT'.
  *   CreditNotes (both ACCRECCREDIT and ACCPAYCREDIT) → 'CREDIT_NOTE'.
+ *   ManualJournals (POSTED only) → 'MANJOURNAL'. Payroll lives here — wage
+ *     journals carry per-fund tracking, so without this endpoint fund
+ *     reporting misses salaries entirely. Journal lines are debit-positive /
+ *     credit-negative, so REVENUE-class lines are stored sign-flipped to keep
+ *     the document-natural convention (credit to income = positive income);
+ *     EXPENSE and balance-sheet lines pass through unchanged (debit to
+ *     expense = positive expenditure). Journal lines have no Xero line ids
+ *     (line_id is positional), so modified/voided journals REPLACE their
+ *     mirrored rows (delete-then-insert) rather than upserting.
  *
  * ── Incremental sync ─────────────────────────────────────────────────────────
  * If-Modified-Since is taken from the last *successful* run's started_at.
@@ -86,6 +95,7 @@ type SourceType =
   | 'CREDIT_NOTE'
   | 'PREPAYMENT'
   | 'OVERPAYMENT'
+  | 'MANJOURNAL'
 
 interface TransactionRow {
   xero_id: string
@@ -256,6 +266,24 @@ interface XeroBankTransactionApi extends XeroDocumentApi {
 interface XeroCreditNoteApi extends XeroDocumentApi {
   CreditNoteID: string
   Type: 'ACCRECCREDIT' | 'ACCPAYCREDIT'
+}
+
+interface XeroManualJournalLineApi {
+  LineAmount?: number
+  AccountCode?: string
+  Description?: string
+  TaxAmount?: number
+  Tracking?: XeroLineTrackingApi[]
+}
+
+interface XeroManualJournalApi {
+  ManualJournalID: string
+  Narration?: string
+  Date?: string
+  Status?: string
+  LineAmountTypes?: string
+  UpdatedDateUTC?: string
+  JournalLines?: XeroManualJournalLineApi[]
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -717,6 +745,109 @@ async function syncCreditNotes(
   )
 }
 
+/**
+ * Mirror POSTED manual journals — this is where payroll lives. See the
+ * source_type mapping note in the module header for the sign convention and
+ * why journals replace (not upsert) their rows.
+ *
+ * The endpoint is fetched WITHOUT a status filter: a journal voided since the
+ * last sync must still arrive here so its mirrored lines are removed.
+ */
+async function syncManualJournals(
+  svc: SupabaseClient,
+  tracking: TrackingIndex,
+  errors: string[],
+  modifiedSince?: string,
+): Promise<number> {
+  const journals = await fetchAllPages<XeroManualJournalApi>(
+    'ManualJournals',
+    'ManualJournals',
+    {},
+    modifiedSince,
+  )
+  if (!journals.length) return 0
+
+  // Journal sign normalisation needs the account's class — read the mirror
+  // (syncAccounts has already run this pass).
+  const { data: accountRows, error: accountError } = await svc
+    .from('xero_accounts')
+    .select('code, class')
+    .not('code', 'is', null)
+    .limit(10000)
+  if (accountError) {
+    throw new Error(`Could not read xero_accounts for journal sync: ${accountError.message}`)
+  }
+  const classByCode = new Map(
+    ((accountRows ?? []) as { code: string; class: string | null }[]).map((a) => [a.code, a.class]),
+  )
+
+  const rows: TransactionRow[] = []
+  for (const mj of journals) {
+    if ((mj.Status ?? 'POSTED') !== 'POSTED') continue
+    const dateIso = parseXeroDate(mj.Date)
+    if (!dateIso) {
+      errors.push(`Skipped manual journal ${mj.ManualJournalID} — no parseable date`)
+      continue
+    }
+    const base = {
+      xero_id: mj.ManualJournalID,
+      source_type: 'MANJOURNAL' as const,
+      date: dateIso.slice(0, 10),
+      contact_id: null,
+      contact_name: null,
+      status: mj.Status ?? null,
+      updated_date_utc: parseXeroDate(mj.UpdatedDateUTC) ?? nowIso(),
+    }
+    ;(mj.JournalLines ?? []).forEach((li, index) => {
+      let rawNet = li.LineAmount ?? 0
+      if (mj.LineAmountTypes === 'Inclusive') rawNet = round2(rawNet - (li.TaxAmount ?? 0))
+      const accountClass = li.AccountCode ? classByCode.get(li.AccountCode) : undefined
+      const sign: 1 | -1 = accountClass === 'REVENUE' ? -1 : 1
+      let tracking1: string | null = null
+      let tracking2: string | null = null
+      for (const t of li.Tracking ?? []) {
+        const resolved = resolveTracking(t, tracking)
+        if (!resolved) continue
+        if (resolved.position === 1) tracking1 = resolved.optionId
+        else tracking2 = resolved.optionId
+      }
+      const net = round2(sign * rawNet)
+      const vat = round2(sign * (li.TaxAmount ?? 0))
+      rows.push({
+        ...base,
+        line_id: `${mj.ManualJournalID}-${index}`,
+        account_code: li.AccountCode ?? null,
+        description: li.Description ?? mj.Narration ?? null,
+        net,
+        vat,
+        gross: round2(net + vat),
+        tracking_option_1_id: tracking1,
+        tracking_option_2_id: tracking2,
+      })
+    })
+  }
+
+  // Replace-by-document: positional line ids mean an edited journal with
+  // fewer lines (or a voided one) would leave stale rows behind on upsert.
+  const journalIds = [...new Set(journals.map((j) => j.ManualJournalID))]
+  for (let i = 0; i < journalIds.length; i += 200) {
+    const chunk = journalIds.slice(i, i + 200)
+    const { error } = await svc
+      .from('xero_transactions')
+      .delete()
+      .eq('source_type', 'MANJOURNAL')
+      .in('xero_id', chunk)
+    if (error) throw new Error(`Could not clear manual journal lines: ${error.message}`)
+  }
+  if (!rows.length) return 0
+  return upsertBatches(
+    svc,
+    'xero_transactions',
+    dedupeBy(rows, (r) => r.line_id),
+    'line_id',
+  )
+}
+
 export type FundType = 'restricted' | 'designated' | 'endowment' | 'general' | 'dormant'
 
 /**
@@ -1064,6 +1195,7 @@ export async function runSync(
     total += await syncInvoices(svc, tracking, errors, modifiedSince)
     total += await syncBankTransactions(svc, tracking, errors, modifiedSince)
     total += await syncCreditNotes(svc, tracking, errors, modifiedSince)
+    total += await syncManualJournals(svc, tracking, errors, modifiedSince)
     total += await autoCreateFunds(svc)
     await runWarningEngine(svc)
 
