@@ -388,6 +388,39 @@ export interface EpworthFundMapping {
   created_at: string
 }
 
+// ── Cashflow forecast (mirrors the weekly Excel template) ────────────────────
+
+export interface CashflowConfig {
+  key: 'default'
+  opening_balance: number
+  opening_date: string // ISO date — the Monday the first week column starts
+  weekly_weeks: number
+  monthly_months: number
+  updated_by: string | null
+  updated_at: string
+}
+
+export interface CashflowLine {
+  id: string
+  section: 'income' | 'outgoing'
+  name: string
+  sort_order: number
+  /** Xero account codes this line maps to, for one-click actuals */
+  account_codes: string[]
+  active: boolean
+  created_at: string
+}
+
+export interface CashflowCell {
+  id: string
+  line_id: string
+  period_start: string // ISO date, the column's first day
+  amount: number // signed as typed — income positive, outgoings negative
+  note: string | null
+  updated_by: string | null
+  updated_at: string
+}
+
 // ── VAT ──────────────────────────────────────────────────────────────────────
 
 export interface DeMinimisResult {

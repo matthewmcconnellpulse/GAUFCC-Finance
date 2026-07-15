@@ -598,6 +598,10 @@ interface EpworthWorkbook {
   nameByRef: Record<string, string>
   excludedCash: ExcludedCash[]
   cashRows: EpworthCashRow[]
+  /** account ref → portfolio market value at the period end (gains sheet Close) */
+  closingValues: Record<string, number>
+  /** Cash Plus account ref → balance at (or before) the period end */
+  cashValues: Record<string, number>
 }
 
 function parseEpworthWorkbook(wb: XLSX.WorkBook): EpworthWorkbook {
@@ -676,8 +680,10 @@ function parseEpworthWorkbook(wb: XLSX.WorkBook): EpworthWorkbook {
   }
 
   // 2. Cash Plus deposit accounts — Interest/Subscription credits are the
-  // month's distribution; transfers/redemptions are capital movements.
+  // month's distribution; transfers/redemptions are capital movements. The
+  // running Balance column also gives each account's balance at period end.
   const cashSheet = findSheet(wb, /cash\s*plus/i)
+  const cashValues: Record<string, number> = {}
   if (cashSheet) {
     const cg = sheetGrid(cashSheet)
     const ch = findHeaderRow(cg, [/narrative/i, /date/i])
@@ -688,13 +694,26 @@ function parseEpworthWorkbook(wb: XLSX.WorkBook): EpworthWorkbook {
       const kDate = ccol(/date/i)
       const kNarr = ccol(/narrative/i)
       const kVal = ccol(/value|amount/i)
+      const kBal = ccol(/balance/i)
+      const periodEnd = `${period}-99` // string compare: anything in or before the period
+      const balanceAsOf: Record<string, string> = {}
+      const activeThisPeriod = new Set<string>()
       if (kRef !== -1 && kDate !== -1 && kNarr !== -1 && kVal !== -1) {
         for (let i = ch + 1; i < cg.length; i++) {
           const row = cg[i]
           const ref = cellText(row[kRef])
           const date = cellToIso(row[kDate])
           const amount = cellNumber(row[kVal])
-          if (!ref || !date || amount === null || !inPeriod(date)) continue
+          if (!ref || !date || amount === null) continue
+          if (kBal !== -1 && date <= periodEnd) {
+            const bal = cellNumber(row[kBal])
+            if (bal !== null && (!balanceAsOf[ref] || date >= balanceAsOf[ref])) {
+              balanceAsOf[ref] = date
+              cashValues[ref] = round2(bal)
+            }
+          }
+          if (!inPeriod(date)) continue
+          activeThisPeriod.add(ref)
           const narrative = cellText(row[kNarr])
           const holdingName = `Epworth Cash Plus ${ref}`
           if (/interest|subscription/i.test(narrative)) {
@@ -707,6 +726,12 @@ function parseEpworthWorkbook(wb: XLSX.WorkBook): EpworthWorkbook {
           } else {
             excludedCash.push({ account_ref: ref, date, narrative: narrative || 'Unrecognised', amount: round2(amount) })
           }
+        }
+        // Only balances from accounts that moved this period are trustworthy —
+        // the sheet keeps rows for accounts long since emptied by transfers,
+        // whose stale running balances would massively overstate cash.
+        for (const ref of Object.keys(cashValues)) {
+          if (!activeThisPeriod.has(ref)) delete cashValues[ref]
         }
       }
     }
@@ -726,16 +751,19 @@ function parseEpworthWorkbook(wb: XLSX.WorkBook): EpworthWorkbook {
     netIncomeByRef[ref] = round2((netIncomeByRef[ref] ?? 0) + amount)
   }
 
-  // 3. Gains sheet — cumulative gain/loss per account. Prefer the '(adj)'
-  // variant (its Gain/Loss is net of capital injections).
+  // 3. Gains sheet — cumulative gain/loss per account, plus the period-end
+  // portfolio value (Close column). Prefer the '(adj)' variant (its Gain/Loss
+  // is net of capital injections).
   const gainsSheet = findSheet(wb, /gain/i, /adj/i) ?? findSheet(wb, /gain/i)
   const cumulativeGains: Record<string, number> = {}
+  const closingValues: Record<string, number> = {}
   if (gainsSheet) {
     const gg = sheetGrid(gainsSheet)
     const gh = findHeaderRow(gg, [/gain/i])
     if (gh !== -1) {
       const ghead = gg[gh].map(cellText)
       const gGain = ghead.findIndex((c) => /gain/i.test(c))
+      const gClose = ghead.findIndex((c) => /^close/i.test(c))
       const refByName = new Map<string, string>()
       for (const [ref, name] of Object.entries(nameByRef)) refByName.set(nameKey(name), ref)
       for (let i = gh + 1; i < gg.length; i++) {
@@ -746,11 +774,25 @@ function parseEpworthWorkbook(wb: XLSX.WorkBook): EpworthWorkbook {
         if (gain === null) continue
         const ref = refByName.get(nameKey(name)) ?? name
         cumulativeGains[ref] = round2(gain)
+        if (gClose !== -1) {
+          const close = cellNumber(row[gClose])
+          if (close !== null) closingValues[ref] = round2(close)
+        }
       }
     }
   }
 
-  return { period, holdings, cumulativeGains, netIncomeByRef, nameByRef, excludedCash, cashRows }
+  return {
+    period,
+    holdings,
+    cumulativeGains,
+    netIncomeByRef,
+    nameByRef,
+    excludedCash,
+    cashRows,
+    closingValues,
+    cashValues,
+  }
 }
 
 interface PriorImport {
@@ -818,6 +860,8 @@ function finaliseEpworth(parsed: EpworthWorkbook, prior: PriorImport | null) {
       ...(prior ? { prior_period: prior.period } : {}),
       excluded_cash: parsed.excludedCash,
       cash_rows: parsed.cashRows,
+      ...(Object.keys(parsed.closingValues).length ? { closing_values: parsed.closingValues } : {}),
+      ...(Object.keys(parsed.cashValues).length ? { cash_values: parsed.cashValues } : {}),
     },
   }
 }

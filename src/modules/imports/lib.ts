@@ -162,6 +162,10 @@ export interface EpworthImportMeta {
   excluded_cash?: Array<{ account_ref: string; date: string; narrative: string; amount: number }>
   /** the period's actual cash movements, for the cash-account CSV export */
   cash_rows?: EpworthCashRow[]
+  /** account ref → portfolio market value at the period end (gains sheet Close) */
+  closing_values?: Record<string, number>
+  /** Cash Plus account ref → balance at the period end (active accounts only) */
+  cash_values?: Record<string, number>
 }
 
 export interface ParseImportResponse {

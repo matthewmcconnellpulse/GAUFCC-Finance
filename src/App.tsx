@@ -30,6 +30,8 @@ const ProfitLossPage = lazy(() =>
 const BalanceSheetPage = lazy(() =>
   import('@/modules/financials/ReportPage').then((m) => ({ default: m.BalanceSheetPage })),
 )
+const InvestmentsPage = lazy(() => import('@/modules/investments/InvestmentsPage'))
+const CashflowPage = lazy(() => import('@/modules/cashflow/CashflowPage'))
 const VatPage = lazy(() => import('@/modules/vat/VatPage'))
 const ProjectsPage = lazy(() => import('@/modules/projects/ProjectsPage'))
 const SettingsPage = lazy(() => import('@/modules/settings/SettingsPage'))
@@ -79,6 +81,8 @@ export default function App() {
               <Route path="financials/profit-loss" element={<Page><ProfitLossPage /></Page>} />
               <Route path="financials/balance-sheet" element={<Page><BalanceSheetPage /></Page>} />
               <Route path="financials/transactions" element={<Page><TransactionsPage /></Page>} />
+              <Route path="financials/investments" element={<Page><InvestmentsPage /></Page>} />
+              <Route path="financials/cashflow" element={<Page><CashflowPage /></Page>} />
               <Route path="expenses" element={<Page><ExpensesPage /></Page>} />
               <Route path="expenses/approvals" element={<Page><ApprovalQueuePage /></Page>} />
               <Route path="expenses/:id" element={<Page><ClaimDetailPage /></Page>} />

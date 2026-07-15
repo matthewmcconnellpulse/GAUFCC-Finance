@@ -16,6 +16,8 @@ const PAGE_NAMES: Array<[RegExp, string]> = [
   [/^\/financials\/profit-loss/, 'Profit & Loss'],
   [/^\/financials\/balance-sheet/, 'Balance Sheet'],
   [/^\/financials\/transactions/, 'Transactions'],
+  [/^\/financials\/investments/, 'Investments'],
+  [/^\/financials\/cashflow/, 'Cash flow'],
   [/^\/expenses\/approvals/, 'Expense approvals'],
   [/^\/expenses\/[0-9a-f-]{36}/, 'Expense claim'],
   [/^\/expenses/, 'Expenses'],

@@ -36,6 +36,8 @@ function useNavSections(): NavSection[] {
         { to: '/financials/profit-loss', label: 'Profit & Loss', show: seesFinancials },
         { to: '/financials/balance-sheet', label: 'Balance Sheet', show: seesFinancials },
         { to: '/financials/transactions', label: 'Transactions', show: seesFinancials },
+        { to: '/financials/investments', label: 'Investments', show: p.isPulse || p.isCeo },
+        { to: '/financials/cashflow', label: 'Cash flow', show: p.isPulse || p.isCeo },
       ],
     },
     {
