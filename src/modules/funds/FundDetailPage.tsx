@@ -127,6 +127,57 @@ export default function FundDetailPage() {
     }
   }, [id, period.start, period.end])
 
+  // Statement backbone: every line the fund has in the period (minimal
+  // columns, chronological) plus the movement BEFORE the period, so each
+  // displayed row can carry the true fund balance after it — bank-statement
+  // style, on exactly the same basis as the balance history chart
+  // (opening balance + REVENUE net − EXPENSE net; other classes don't move it).
+  const stmt = useSupabaseQuery(async () => {
+    if (!id || !core.data?.fund) return null
+    const fund = core.data.fund
+    const ids = await fetchTrackingIds(id)
+    if (ids.length === 0) return null
+    const floor = fund.opening_balance_date // v_fund_balances ignores lines before it
+
+    const preRows: Array<Pick<XeroTransaction, 'net' | 'account_code'>> = []
+    if (!floor || floor < period.start) {
+      for (let offset = 0; offset < ALL_CAP; offset += ALL_CHUNK) {
+        let q = supabase
+          .from('xero_transactions')
+          .select('net, account_code')
+          .in('tracking_option_1_id', ids)
+          .lt('date', period.start)
+        if (floor) q = q.gte('date', floor)
+        const { data, error } = await q.range(offset, offset + ALL_CHUNK - 1)
+        if (error) throw new Error(error.message)
+        preRows.push(...((data ?? []) as Array<Pick<XeroTransaction, 'net' | 'account_code'>>))
+        if (!data || data.length < ALL_CHUNK) break
+      }
+    }
+
+    // Chronological order must be the exact reverse of the table's display
+    // order (date desc, line_id asc) so running balances read coherently
+    // within a same-day group.
+    const periodRows: Array<Pick<XeroTransaction, 'xero_id' | 'line_id' | 'date' | 'net' | 'account_code'>> = []
+    for (let offset = 0; offset < ALL_CAP; offset += ALL_CHUNK) {
+      const { data, error } = await supabase
+        .from('xero_transactions')
+        .select('xero_id, line_id, date, net, account_code')
+        .in('tracking_option_1_id', ids)
+        .gte('date', period.start)
+        .lte('date', period.end)
+        .order('date', { ascending: true })
+        .order('line_id', { ascending: false })
+        .range(offset, offset + ALL_CHUNK - 1)
+      if (error) throw new Error(error.message)
+      periodRows.push(
+        ...((data ?? []) as Array<Pick<XeroTransaction, 'xero_id' | 'line_id' | 'date' | 'net' | 'account_code'>>),
+      )
+      if (!data || data.length < ALL_CHUNK) break
+    }
+    return { preRows, periodRows }
+  }, [id, period.start, period.end, core.data?.fund?.id, core.data?.fund?.opening_balance_date])
+
   const txns = useSupabaseQuery(async () => {
     if (!id) return null
     const ids = await fetchTrackingIds(id)
@@ -181,6 +232,36 @@ export default function FundDetailPage() {
     return cumulativeBalances(core.data.monthly, core.data.fund.opening_balance).slice(-36)
   }, [core.data])
 
+  // Running balances per line: fund movement per row (signed by account
+  // class) accumulated from the balance brought forward at the period start.
+  const statement = useMemo(() => {
+    const fund = core.data?.fund
+    const acctMap = accounts.data
+    if (!fund || !stmt.data || !acctMap) return null
+    const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+    const classOf = (code: string | null) => (code ? (acctMap.get(code)?.class ?? null) : null)
+    const movement = (net: number, code: string | null) => {
+      const c = classOf(code)
+      return c === 'REVENUE' ? net : c === 'EXPENSE' ? -net : 0
+    }
+
+    let opening = fund.opening_balance
+    for (const r of stmt.data.preRows) opening = r2(opening + movement(r.net, r.account_code))
+
+    const floor = fund.opening_balance_date
+    const byLine = new Map<string, { movement: number; balance: number }>()
+    let running = opening
+    for (const r of stmt.data.periodRows) {
+      // Lines dated before the opening-balance date are visible but excluded
+      // from the balance (same rule as v_fund_balances).
+      const m = floor && r.date < floor ? 0 : movement(r.net, r.account_code)
+      running = r2(running + m)
+      byLine.set(`${r.xero_id}-${r.line_id}`, { movement: m, balance: running })
+    }
+    const effectiveStart = floor && floor > period.start ? floor : period.start
+    return { opening, effectiveStart, byLine }
+  }, [stmt.data, accounts.data, core.data?.fund, period.start])
+
   if (core.loading) {
     return (
       <div>
@@ -224,6 +305,13 @@ export default function FundDetailPage() {
   const balanceRow = core.data?.balanceRow ?? null
   const managers = core.data?.managers ?? []
   const warnings = core.data?.warnings ?? []
+
+  // The running balance only reads as a statement over the FULL set of lines
+  // — with an income/expenditure filter applied, hidden rows would make the
+  // balance appear to jump, so the column steps aside.
+  const showBalance = classFilter === ''
+  const txCount = txns.data?.count ?? 0
+  const isLastPage = pageSize === 'all' || (page + 1) * pageSize >= txCount
 
   return (
     <div>
@@ -351,44 +439,80 @@ export default function FundDetailPage() {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[820px]">
+              <table className="w-full text-left border-collapse min-w-[900px]">
                 <thead>
                   <tr>
                     <th className="th-register">Date</th>
                     <th className="th-register">Description</th>
                     <th className="th-register">Contact</th>
                     <th className="th-register">Account</th>
-                    <th className="th-register text-right">Net</th>
+                    <th className="th-register text-right">In / out</th>
                     <th className="th-register text-right">VAT</th>
                     <th className="th-register text-right">Gross</th>
+                    {showBalance ? <th className="th-register text-right">Balance</th> : null}
                     <th className="th-register">Source</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {txns.data.rows.map((t) => (
-                    <tr key={`${t.xero_id}-${t.line_id}`}>
-                      <td className="td-register figure text-[11.5px] whitespace-nowrap">{formatDate(t.date)}</td>
-                      <td className="td-register text-[12px] text-ink max-w-[280px]">
-                        <span className="line-clamp-2">{t.description ?? '—'}</span>
+                  {txns.data.rows.map((t) => {
+                    const line = statement?.byLine.get(`${t.xero_id}-${t.line_id}`) ?? null
+                    return (
+                      <tr key={`${t.xero_id}-${t.line_id}`}>
+                        <td className="td-register figure text-[11.5px] whitespace-nowrap">{formatDate(t.date)}</td>
+                        <td className="td-register text-[12px] text-ink max-w-[280px]">
+                          <span className="line-clamp-2">{t.description ?? '—'}</span>
+                        </td>
+                        <td className="td-register text-[12px] text-stone-700 whitespace-nowrap">
+                          {t.contact_name ?? '—'}
+                        </td>
+                        <td className="td-register text-[12px] text-stone-700 whitespace-nowrap">
+                          {accountLabel(t.account_code, accounts.data ?? null)}
+                        </td>
+                        <td
+                          className={cx(
+                            'td-register text-right figure text-[11.5px]',
+                            line && line.movement > 0 && 'text-mint-900',
+                          )}
+                          title={line && line.movement === 0 ? 'Does not move the fund balance' : undefined}
+                        >
+                          {line ? (line.movement === 0 ? '—' : formatMovement(line.movement)) : formatMoney(t.net)}
+                        </td>
+                        <td className="td-register text-right figure text-[11.5px] text-stone-500">
+                          {formatMoney(t.vat)}
+                        </td>
+                        <td className="td-register text-right figure text-[11.5px]">{formatMoney(t.gross)}</td>
+                        {showBalance ? (
+                          <td className="td-register text-right figure text-[11.5px] font-medium whitespace-nowrap">
+                            {line ? formatMoney(line.balance) : '…'}
+                          </td>
+                        ) : null}
+                        <td className="td-register">
+                          <StatusChip tone="neutral">{sourceTypeLabel(t.source_type)}</StatusChip>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {/* Balance brought forward — the statement's starting line,
+                      shown under the oldest transactions (newest-first order) */}
+                  {showBalance && statement && isLastPage ? (
+                    <tr className="bg-paper-2/80">
+                      <td className="td-register figure text-[11.5px] whitespace-nowrap">
+                        {formatDate(statement.effectiveStart)}
                       </td>
-                      <td className="td-register text-[12px] text-stone-700 whitespace-nowrap">
-                        {t.contact_name ?? '—'}
+                      <td className="td-register text-[12px] font-medium text-ink" colSpan={3}>
+                        Opening balance — brought forward
                       </td>
-                      <td className="td-register text-[12px] text-stone-700 whitespace-nowrap">
-                        {accountLabel(t.account_code, accounts.data ?? null)}
-                      </td>
-                      <td className="td-register text-right figure text-[11.5px]">{formatMoney(t.net)}</td>
-                      <td className="td-register text-right figure text-[11.5px] text-stone-500">
-                        {formatMoney(t.vat)}
-                      </td>
-                      <td className="td-register text-right figure text-[11.5px] font-medium">
-                        {formatMoney(t.gross)}
+                      <td className="td-register text-right figure text-[11.5px] text-stone-400">—</td>
+                      <td className="td-register text-right figure text-[11.5px] text-stone-400">—</td>
+                      <td className="td-register text-right figure text-[11.5px] text-stone-400">—</td>
+                      <td className="td-register text-right figure text-[11.5px] font-semibold whitespace-nowrap">
+                        {formatMoney(statement.opening)}
                       </td>
                       <td className="td-register">
-                        <StatusChip tone="neutral">{sourceTypeLabel(t.source_type)}</StatusChip>
+                        <StatusChip tone="indigo">Opening</StatusChip>
                       </td>
                     </tr>
-                  ))}
+                  ) : null}
                 </tbody>
               </table>
             </div>
@@ -400,6 +524,11 @@ export default function FundDetailPage() {
               onPage={setPage}
               onPageSize={setPageSize}
             />
+            <p className="px-5 pb-4 text-[11px] text-stone-500">
+              {showBalance
+                ? 'Reads like a bank statement: In / out is each line’s effect on the fund (income +, expenditure −), and Balance runs from the opening balance brought forward — the same basis as the balance history above. Lines marked — sit on balance-sheet accounts and don’t move the fund.'
+                : 'In / out is each line’s effect on the fund (income +, expenditure −). Switch to All to see the running balance and the opening balance brought forward.'}
+            </p>
           </>
         )}
       </Card>
