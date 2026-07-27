@@ -37,6 +37,7 @@ import {
   fetchEpworthImports,
   fetchFundOptions,
   fetchFundTrackingCategoryName,
+  fetchJournalSettings,
   fetchMappings,
   holdingsOf,
   importFilePath,
@@ -46,6 +47,7 @@ import {
   parseImport,
   periodEndIso,
   round2,
+  saveJournalSettings,
   updateEpworthImport,
   uploadImportFile,
   validateImportFile,
@@ -242,18 +244,16 @@ export default function EpworthTab() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Journal export settings — account codes deliberately default blank for
-  // the bookkeeper to fill or adapt after download.
+  // Journal export settings. Saved mappings (epworth_journal_settings)
+  // pre-fill every field; local edits (null = untouched) sit on top until
+  // 'Save mappings' writes them back for next month.
+  const savedQ = useSupabaseQuery(fetchJournalSettings)
+  const saved = savedQ.data ?? null
   const [narration, setNarration] = useState<string | null>(null)
-  const [assetCode, setAssetCode] = useState('')
+  const [assetCode, setAssetCode] = useState<string | null>(null)
   const [trackingName, setTrackingName] = useState<string | null>(null)
-  const [incomeCodes, setIncomeCodes] = useState<Record<IncomeType, string>>({
-    dividend: '',
-    interest: '',
-    realised_gain: '',
-    unrealised_gain: '',
-    fee: '',
-  })
+  const [incomeCodes, setIncomeCodes] = useState<Partial<Record<IncomeType, string>>>({})
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
 
   const imports = importsQ.data ?? []
   const active = imports.find((i) => i.id === activeId) ?? imports[0] ?? null
@@ -270,8 +270,33 @@ export default function EpworthTab() {
 
   const defaultNarration = active ? `Epworth investment income — ${formatPeriod(active.period)}` : ''
   const narrationValue = narration ?? defaultNarration
-  const trackingNameValue = trackingName ?? trackingNameQ.data ?? 'Fund'
+  const trackingNameValue = trackingName ?? saved?.tracking_category_name ?? trackingNameQ.data ?? 'Fund'
+  const assetCodeValue = assetCode ?? saved?.asset_account_code ?? ''
+  const incomeCodeValue = (t: IncomeType) => incomeCodes[t] ?? saved?.income_account_codes[t] ?? ''
   const activeMeta = useMemo(() => (active ? metaOf(active) : {}), [active])
+
+  async function handleSaveMappings() {
+    if (!profile) return
+    setSaveState('saving')
+    setError(null)
+    try {
+      await saveJournalSettings(
+        {
+          tracking_category_name: trackingNameValue.trim() || 'Fund',
+          asset_account_code: assetCodeValue.trim() || null,
+          income_account_codes: Object.fromEntries(
+            INCOME_TYPES.map((t) => [t, incomeCodeValue(t).trim()]),
+          ) as Record<IncomeType, string>,
+        },
+        profile.id,
+      )
+      savedQ.refetch()
+      setSaveState('saved')
+    } catch (e) {
+      setSaveState('idle')
+      setError(e instanceof Error ? e.message : 'The mappings could not be saved.')
+    }
+  }
 
   async function handleFile(file: File) {
     setError(null)
@@ -381,9 +406,9 @@ export default function EpworthTab() {
       const csv = buildEpworthJournalCsv(matrix.rows, {
         narration: narrationValue,
         dateIso: periodEndIso(active.period),
-        assetAccountCode: assetCode.trim(),
+        assetAccountCode: assetCodeValue.trim(),
         incomeAccountCodes: Object.fromEntries(
-          INCOME_TYPES.map((t) => [t, incomeCodes[t].trim()]),
+          INCOME_TYPES.map((t) => [t, incomeCodeValue(t).trim()]),
         ) as Record<IncomeType, string>,
         trackingCategoryName: trackingNameValue.trim() || 'Fund',
       })
@@ -642,7 +667,23 @@ export default function EpworthTab() {
 
             {/* Journal settings + exports */}
             <Card className="p-4">
-              <SectionLabel>Journal export settings</SectionLabel>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SectionLabel>Journal export settings</SectionLabel>
+                <div className="flex items-center gap-2 pb-2">
+                  {saveState === 'saved' ? (
+                    <span className="text-[11px] text-mint-900">✓ Saved — these mappings pre-fill every month</span>
+                  ) : saved ? (
+                    <span className="text-[11px] text-stone-500">pre-filled from saved mappings</span>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    disabled={saveState === 'saving'}
+                    onClick={() => void handleSaveMappings()}
+                  >
+                    {saveState === 'saving' ? 'Saving…' : 'Save mappings'}
+                  </Button>
+                </div>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Narration">
                   <Input value={narrationValue} onChange={(e) => setNarration(e.target.value)} />
@@ -651,15 +692,24 @@ export default function EpworthTab() {
                   label="Tracking category"
                   hint="Xero's TrackingName1 column — the category the funds live under."
                 >
-                  <Input value={trackingNameValue} onChange={(e) => setTrackingName(e.target.value)} />
+                  <Input
+                    value={trackingNameValue}
+                    onChange={(e) => {
+                      setTrackingName(e.target.value)
+                      setSaveState('idle')
+                    }}
+                  />
                 </Field>
                 <Field
                   label="Investment asset account code"
-                  hint="Debit side. Left blank, the bookkeeper fills it in after download."
+                  hint="Debit side — the investment current asset. Save mappings to keep it for next month."
                 >
                   <Input
-                    value={assetCode}
-                    onChange={(e) => setAssetCode(e.target.value)}
+                    value={assetCodeValue}
+                    onChange={(e) => {
+                      setAssetCode(e.target.value)
+                      setSaveState('idle')
+                    }}
                     placeholder="leave blank to fill in later"
                     className="font-mono"
                   />
@@ -668,8 +718,12 @@ export default function EpworthTab() {
                   {INCOME_TYPES.map((t) => (
                     <Field key={t} label={`${INCOME_TYPE_SHORT[t]} account`}>
                       <Input
-                        value={incomeCodes[t]}
-                        onChange={(e) => setIncomeCodes((c) => ({ ...c, [t]: e.target.value }))}
+                        value={incomeCodeValue(t)}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setIncomeCodes((c) => ({ ...c, [t]: v }))
+                          setSaveState('idle')
+                        }}
                         placeholder="blank"
                         className="font-mono"
                       />

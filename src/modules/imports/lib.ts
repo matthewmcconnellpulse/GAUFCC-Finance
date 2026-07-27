@@ -327,6 +327,55 @@ export async function fetchFundOptions(): Promise<FundOption[]> {
     .map(({ fund_id, name, fund_type }) => ({ fund_id, name, fund_type }))
 }
 
+// ── Saved journal export mappings (epworth_journal_settings, single row) ─────
+
+export interface EpworthJournalSaved {
+  tracking_category_name: string | null
+  asset_account_code: string | null
+  income_account_codes: Partial<Record<IncomeType, string>>
+}
+
+export async function fetchJournalSettings(): Promise<EpworthJournalSaved | null> {
+  const { data, error } = await supabase
+    .from('epworth_journal_settings')
+    .select('tracking_category_name, asset_account_code, income_account_codes')
+    .eq('key', 'default')
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return null
+  const row = data as {
+    tracking_category_name: string | null
+    asset_account_code: string | null
+    income_account_codes: unknown
+  }
+  const codes: Partial<Record<IncomeType, string>> = {}
+  if (row.income_account_codes && typeof row.income_account_codes === 'object') {
+    for (const [k, v] of Object.entries(row.income_account_codes as Record<string, unknown>)) {
+      if (typeof v === 'string' && (INCOME_TYPES as string[]).includes(k)) codes[k as IncomeType] = v
+    }
+  }
+  return {
+    tracking_category_name: row.tracking_category_name,
+    asset_account_code: row.asset_account_code,
+    income_account_codes: codes,
+  }
+}
+
+export async function saveJournalSettings(values: EpworthJournalSaved, userId: string): Promise<void> {
+  const { error } = await supabase.from('epworth_journal_settings').upsert(
+    {
+      key: 'default',
+      tracking_category_name: values.tracking_category_name,
+      asset_account_code: values.asset_account_code,
+      income_account_codes: values.income_account_codes,
+      updated_by: userId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'key' },
+  )
+  if (error) throw new Error(error.message)
+}
+
 /**
  * Name of the Xero tracking category the funds live under (category 1 on the
  * journal CSV). Resolved via any fund's tracking option; null when Xero has
