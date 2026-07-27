@@ -74,12 +74,24 @@ export interface FundTotalsRow {
   total: number
 }
 
+/** One journal posting unit: a holding's amount of one income type, tracked to its fund. */
+export interface JournalLine {
+  /** Epworth account ref (A05…, P…) — picks the balance-sheet asset code */
+  ref: string
+  /** fund label == Xero tracking option name */
+  fundLabel: string
+  type: IncomeType
+  amount: number
+}
+
 export interface JournalSettings {
   narration: string
   /** journal date, ISO — usually the last day of the period */
   dateIso: string
-  /** debit side — investment asset account; blank = bookkeeper fills in */
+  /** fallback debit code for refs without a specific asset mapping */
   assetAccountCode: string
+  /** holding ref → balance-sheet (current asset investment) code */
+  assetAccountCodesByRef: Record<string, string>
   /** counter side per income type (income accounts; fees an expense account) */
   incomeAccountCodes: Record<IncomeType, string>
   /** Xero tracking category name the funds live under (category 1) */
@@ -105,41 +117,47 @@ export const EPWORTH_JOURNAL_HEADERS = [
 const JOURNAL_TAX_RATE = 'No VAT'
 
 /**
- * For every fund × income type a signed pair — debit the investment asset
- * (+), credit the income account (−). Fees arrive negative, so the same pair
- * flips into credit-asset / debit-expense. Pairs sum to zero; account codes
- * default blank for the bookkeeper to fill in before importing.
+ * For every Epworth account × income type a signed pair — debit that
+ * account's OWN current-asset investment code (+), credit the income account
+ * (−), both tracked to the holding's fund. Fees arrive negative, so the same
+ * pair flips into credit-asset / debit-expense. Pairs sum to zero; unmapped
+ * refs fall back to the default asset code (blank = bookkeeper fills in).
  */
-export function buildEpworthJournalCsv(funds: FundTotalsRow[], settings: JournalSettings): string {
+export function buildEpworthJournalCsv(lines: JournalLine[], settings: JournalSettings): string {
   const date = isoToUk(settings.dateIso)
+  const typeOrder = new Map(INCOME_TYPES.map((t, i) => [t, i]))
+  const sorted = [...lines].sort(
+    (a, b) =>
+      a.fundLabel.localeCompare(b.fundLabel) ||
+      a.ref.localeCompare(b.ref) ||
+      (typeOrder.get(a.type) ?? 0) - (typeOrder.get(b.type) ?? 0),
+  )
   const rows: Array<Array<string | number>> = []
-  for (const fund of funds) {
-    if (fund.fund_id == null) continue // unmapped lines never reach the journal
-    for (const type of INCOME_TYPES) {
-      const amount = round2(fund.amounts[type])
-      if (amount === 0) continue
-      const description = `${fund.label} — ${INCOME_TYPE_LABELS[type]}`
-      rows.push([
-        settings.narration,
-        date,
-        description,
-        settings.assetAccountCode,
-        JOURNAL_TAX_RATE,
-        amount,
-        settings.trackingCategoryName,
-        fund.label,
-      ])
-      rows.push([
-        settings.narration,
-        date,
-        description,
-        settings.incomeAccountCodes[type],
-        JOURNAL_TAX_RATE,
-        round2(-amount),
-        settings.trackingCategoryName,
-        fund.label,
-      ])
-    }
+  for (const line of sorted) {
+    const amount = round2(line.amount)
+    if (amount === 0) continue
+    const assetCode = settings.assetAccountCodesByRef[line.ref]?.trim() || settings.assetAccountCode
+    const description = `${line.fundLabel} — ${INCOME_TYPE_LABELS[line.type]} · ${line.ref}`
+    rows.push([
+      settings.narration,
+      date,
+      description,
+      assetCode,
+      JOURNAL_TAX_RATE,
+      amount,
+      settings.trackingCategoryName,
+      line.fundLabel,
+    ])
+    rows.push([
+      settings.narration,
+      date,
+      description,
+      settings.incomeAccountCodes[line.type],
+      JOURNAL_TAX_RATE,
+      round2(-amount),
+      settings.trackingCategoryName,
+      line.fundLabel,
+    ])
   }
   return buildCsv(EPWORTH_JOURNAL_HEADERS, rows)
 }

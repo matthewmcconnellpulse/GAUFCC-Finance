@@ -331,14 +331,17 @@ export async function fetchFundOptions(): Promise<FundOption[]> {
 
 export interface EpworthJournalSaved {
   tracking_category_name: string | null
+  /** fallback debit code for holdings without a specific asset mapping */
   asset_account_code: string | null
   income_account_codes: Partial<Record<IncomeType, string>>
+  /** holding ref → balance-sheet (current asset investment) code */
+  asset_account_codes: Record<string, string>
 }
 
 export async function fetchJournalSettings(): Promise<EpworthJournalSaved | null> {
   const { data, error } = await supabase
     .from('epworth_journal_settings')
-    .select('tracking_category_name, asset_account_code, income_account_codes')
+    .select('tracking_category_name, asset_account_code, income_account_codes, asset_account_codes')
     .eq('key', 'default')
     .maybeSingle()
   if (error) throw new Error(error.message)
@@ -347,6 +350,7 @@ export async function fetchJournalSettings(): Promise<EpworthJournalSaved | null
     tracking_category_name: string | null
     asset_account_code: string | null
     income_account_codes: unknown
+    asset_account_codes: unknown
   }
   const codes: Partial<Record<IncomeType, string>> = {}
   if (row.income_account_codes && typeof row.income_account_codes === 'object') {
@@ -354,10 +358,17 @@ export async function fetchJournalSettings(): Promise<EpworthJournalSaved | null
       if (typeof v === 'string' && (INCOME_TYPES as string[]).includes(k)) codes[k as IncomeType] = v
     }
   }
+  const assetCodes: Record<string, string> = {}
+  if (row.asset_account_codes && typeof row.asset_account_codes === 'object') {
+    for (const [k, v] of Object.entries(row.asset_account_codes as Record<string, unknown>)) {
+      if (typeof v === 'string') assetCodes[k] = v
+    }
+  }
   return {
     tracking_category_name: row.tracking_category_name,
     asset_account_code: row.asset_account_code,
     income_account_codes: codes,
+    asset_account_codes: assetCodes,
   }
 }
 
@@ -368,6 +379,7 @@ export async function saveJournalSettings(values: EpworthJournalSaved, userId: s
       tracking_category_name: values.tracking_category_name,
       asset_account_code: values.asset_account_code,
       income_account_codes: values.income_account_codes,
+      asset_account_codes: values.asset_account_codes,
       updated_by: userId,
       updated_at: new Date().toISOString(),
     },

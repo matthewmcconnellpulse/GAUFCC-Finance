@@ -60,6 +60,7 @@ import {
   buildPostingSummaryCsv,
   downloadTextFile,
   type FundTotalsRow,
+  type JournalLine,
 } from './xeroCsv'
 import { FileDrop, ImportStatusChip, WarnIcon } from './components'
 
@@ -253,6 +254,8 @@ export default function EpworthTab() {
   const [assetCode, setAssetCode] = useState<string | null>(null)
   const [trackingName, setTrackingName] = useState<string | null>(null)
   const [incomeCodes, setIncomeCodes] = useState<Partial<Record<IncomeType, string>>>({})
+  // holding ref → balance-sheet asset code (local edits over saved values)
+  const [assetCodes, setAssetCodes] = useState<Record<string, string>>({})
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
 
   const imports = importsQ.data ?? []
@@ -273,13 +276,31 @@ export default function EpworthTab() {
   const trackingNameValue = trackingName ?? saved?.tracking_category_name ?? trackingNameQ.data ?? 'Fund'
   const assetCodeValue = assetCode ?? saved?.asset_account_code ?? ''
   const incomeCodeValue = (t: IncomeType) => incomeCodes[t] ?? saved?.income_account_codes[t] ?? ''
+  const assetCodeForRef = (ref: string) => assetCodes[ref] ?? saved?.asset_account_codes[ref] ?? ''
   const activeMeta = useMemo(() => (active ? metaOf(active) : {}), [active])
+
+  // The Epworth accounts needing a balance-sheet mapping: every holding on
+  // the active import, plus any refs already saved (so a mapping stays
+  // visible even when an account has no activity this month).
+  const assetRefs = useMemo(() => {
+    const refs = new Map<string, string>() // ref → display name
+    for (const g of groups) refs.set(g.ref, g.name)
+    for (const ref of Object.keys(saved?.asset_account_codes ?? {})) {
+      if (!refs.has(ref)) refs.set(ref, '')
+    }
+    return [...refs.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [groups, saved])
 
   async function handleSaveMappings() {
     if (!profile) return
     setSaveState('saving')
     setError(null)
     try {
+      const perRef: Record<string, string> = {}
+      for (const [ref] of assetRefs) {
+        const code = assetCodeForRef(ref).trim()
+        if (code) perRef[ref] = code
+      }
       await saveJournalSettings(
         {
           tracking_category_name: trackingNameValue.trim() || 'Fund',
@@ -287,6 +308,7 @@ export default function EpworthTab() {
           income_account_codes: Object.fromEntries(
             INCOME_TYPES.map((t) => [t, incomeCodeValue(t).trim()]),
           ) as Record<IncomeType, string>,
+          asset_account_codes: perRef,
         },
         profile.id,
       )
@@ -403,10 +425,30 @@ export default function EpworthTab() {
     setBusy(true)
     setError(null)
     try {
-      const csv = buildEpworthJournalCsv(matrix.rows, {
+      // One posting pair per Epworth account × income type, so each debit
+      // hits that account's own current-asset investment code.
+      const journalLines: JournalLine[] = []
+      for (const g of groups) {
+        for (const type of g.types) {
+          const amount = round2(g.amounts[type])
+          if (amount === 0) continue
+          const mapping = mappings.get(mappingKey(g.ref, type))
+          if (!mapping) continue // blocked upstream by the unmapped guard
+          journalLines.push({
+            ref: g.ref,
+            fundLabel: fundById.get(mapping.fund_id)?.name ?? 'Unknown fund',
+            type,
+            amount,
+          })
+        }
+      }
+      const csv = buildEpworthJournalCsv(journalLines, {
         narration: narrationValue,
         dateIso: periodEndIso(active.period),
         assetAccountCode: assetCodeValue.trim(),
+        assetAccountCodesByRef: Object.fromEntries(
+          assetRefs.map(([ref]) => [ref, assetCodeForRef(ref).trim()]),
+        ),
         incomeAccountCodes: Object.fromEntries(
           INCOME_TYPES.map((t) => [t, incomeCodeValue(t).trim()]),
         ) as Record<IncomeType, string>,
@@ -421,14 +463,20 @@ export default function EpworthTab() {
     }
   }
 
-  async function handleExportCash() {
+  /** One statement per Epworth account (ref) so each imports into its own
+   *  Xero bank account; no ref = the combined file. */
+  async function handleExportCash(ref?: string) {
     if (!active) return
-    const rows = activeMeta.cash_rows ?? []
+    const all = activeMeta.cash_rows ?? []
+    const rows = ref ? all.filter((r) => r.reference === ref) : all
     if (rows.length === 0) return
     setBusy(true)
     setError(null)
     try {
-      downloadTextFile(`epworth-cash-statement-${active.period}.csv`, buildEpworthCashCsv(rows))
+      downloadTextFile(
+        `epworth-cash-statement-${ref ? `${ref}-` : ''}${active.period}.csv`,
+        buildEpworthCashCsv(rows),
+      )
       await markExported()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The cash statement CSV could not be generated.')
@@ -436,6 +484,19 @@ export default function EpworthTab() {
       setBusy(false)
     }
   }
+
+  // Accounts present in the month's cash movements — Cash Plus deposit
+  // accounts first (they exist as real bank accounts in Xero).
+  const cashAccounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of activeMeta.cash_rows ?? []) {
+      counts.set(r.reference, (counts.get(r.reference) ?? 0) + 1)
+    }
+    const nameOf = (ref: string) => groups.find((g) => g.ref === ref)?.name ?? ''
+    return [...counts.entries()]
+      .map(([ref, count]) => ({ ref, count, cashPlus: /cash plus/i.test(nameOf(ref)) }))
+      .sort((a, b) => Number(b.cashPlus) - Number(a.cashPlus) || a.ref.localeCompare(b.ref))
+  }, [activeMeta, groups])
 
   async function handleExportSummary() {
     if (!active) return
@@ -731,6 +792,45 @@ export default function EpworthTab() {
                   ))}
                 </div>
               </div>
+
+              {/* Balance sheet — each Epworth account debits its own
+                  current-asset investment code */}
+              {assetRefs.length > 0 ? (
+                <div className="mt-4 pt-4 border-t border-stone-150">
+                  <div className="text-[10.5px] font-medium uppercase tracking-[.08em] text-stone-500 mb-1">
+                    Balance sheet — asset code per Epworth account
+                  </div>
+                  <p className="text-[11px] text-stone-500 mb-3">
+                    The journal debits each account's own current-asset investment in Xero. Anything left blank
+                    falls back to the default asset code above. Save mappings to keep these.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {assetRefs.map(([ref, name]) => (
+                      <div key={ref} className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-[11px] text-ink">{ref}</div>
+                          {name ? (
+                            <div className="text-[10px] text-stone-500 truncate" title={name}>
+                              {name}
+                            </div>
+                          ) : null}
+                        </div>
+                        <Input
+                          value={assetCodeForRef(ref)}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setAssetCodes((c) => ({ ...c, [ref]: v }))
+                            setSaveState('idle')
+                          }}
+                          placeholder="asset code"
+                          className="font-mono !w-[110px]"
+                          aria-label={`Asset account code for ${ref}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="flex flex-wrap items-center gap-3 mt-4">
                 <Button
                   variant="money"
@@ -739,18 +839,6 @@ export default function EpworthTab() {
                   title={matrix.unmappedLines > 0 ? 'Map every line to a fund first' : undefined}
                 >
                   Export Xero manual journal CSV
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={busy || (activeMeta.cash_rows ?? []).length === 0}
-                  onClick={() => void handleExportCash()}
-                  title={
-                    (activeMeta.cash_rows ?? []).length === 0
-                      ? 'Available when the report was parsed from the Epworth workbook'
-                      : undefined
-                  }
-                >
-                  Export cash-account statement CSV
                 </Button>
                 <Button variant="ghost" disabled={busy || groups.length === 0} onClick={() => void handleExportSummary()}>
                   Export posting summary CSV
@@ -761,12 +849,35 @@ export default function EpworthTab() {
                   </span>
                 ) : null}
               </div>
+              {cashAccounts.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <span className="text-[11px] text-stone-500">
+                    Cash statement CSV — one per Epworth account, for its own Xero bank account:
+                  </span>
+                  {cashAccounts.map((a) => (
+                    <Button
+                      key={a.ref}
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => void handleExportCash(a.ref)}
+                      title={`${a.count} movement${a.count === 1 ? '' : 's'} this month${a.cashPlus ? ' · Cash Plus' : ''}`}
+                    >
+                      {a.ref}
+                      {a.cashPlus ? ' · Cash Plus' : ''}
+                    </Button>
+                  ))}
+                  <Button variant="ghost" disabled={busy} onClick={() => void handleExportCash()}>
+                    All accounts
+                  </Button>
+                </div>
+              ) : null}
               <p className="text-[11px] text-stone-500 mt-3">
-                Journal date {formatDate(periodEndIso(active.period))} · signed debit/credit pairs per fund and income
-                type with TaxRate &lsquo;No VAT&rsquo;, tracked against each fund via {trackingNameValue}. The
-                cash-account statement CSV carries the month&rsquo;s actual cash movements instead (Xero bank-statement
-                format) for importing the Epworth account as a cash account. Everything is generated as CSVs for the
-                bookkeeper to adapt — nothing is pushed to Xero by the platform.
+                Journal date {formatDate(periodEndIso(active.period))} · signed debit/credit pairs per Epworth account
+                and income type with TaxRate &lsquo;No VAT&rsquo;, each debit hitting that account&rsquo;s own
+                current-asset code and tracked against its fund via {trackingNameValue}. The cash statement CSVs carry
+                the month&rsquo;s actual cash movements per account (Xero bank-statement format) for importing into the
+                matching bank account. Everything is generated as CSVs for the bookkeeper to adapt — nothing is pushed
+                to Xero by the platform.
               </p>
               <p className="text-[11px] text-stone-500 mt-1.5">
                 Feed-through: investment income appears against each fund in reporting once the journal is posted in
