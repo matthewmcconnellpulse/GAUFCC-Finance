@@ -243,7 +243,7 @@ function PipelineBoard({
 
 export default function PeoplePage() {
   const navigate = useNavigate()
-  const { isAdmin, isPayroll } = usePermissions()
+  const { isAdmin, isPayroll, isCeo } = usePermissions()
   const people = useSupabaseQuery(fetchPeople, [])
   const [stageFilter, setStageFilter] = useState<OnboardingStatus | null>(null)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
@@ -277,14 +277,14 @@ export default function PeoplePage() {
     downloadTextFile(`payroll-export-${today}.csv`, payrollCsv(exportable), 'text/csv')
   }
 
-  if (!isAdmin && !isPayroll) {
+  if (!isAdmin && !isPayroll && !isCeo) {
     return (
       <div>
         <PageHeader title="People" subtitle="Employee and volunteer records" />
         <Card>
           <EmptyState
             title="People records are restricted"
-            hint="Only the Pulse payroll team and administrators can view this area."
+            hint="Only the Pulse payroll team, administrators and the CEO can view this area."
           />
         </Card>
       </div>

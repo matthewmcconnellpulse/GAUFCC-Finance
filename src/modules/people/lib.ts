@@ -83,35 +83,25 @@ export async function updatePerson(id: string, patch: PersonPatch): Promise<void
 }
 
 /**
- * Create a login for an employee/volunteer: sends a Supabase invite email
- * (they choose their password from the link), creates a submitter profile and
- * links people.profile_id so their expense history follows them.
- * Pulse admin only (the invite-user function enforces it).
+ * Create-or-link a login for an employee/volunteer WITHOUT any email being
+ * sent (pulse_admin or ceo — the person-login-link function enforces it,
+ * and refuses to touch privileged logins):
+ *  - no password → a copyable one-time link comes back (sign-up for a new
+ *    email, set-password for an existing one) to send through any channel;
+ *  - password given → the login is ready to sign in with it immediately.
+ * Either way a submitter profile is created for new logins and
+ * people.profile_id is linked so their expense history follows them.
  */
-export async function createPersonLogin(person: Person, email: string): Promise<void> {
-  await invokeFunction('invite-user', {
-    email,
-    full_name: `${person.first_name} ${person.last_name}`.trim(),
-    role: 'submitter',
-    organisation: 'gaufcc',
-    person_id: person.id,
-  })
-}
-
-/**
- * Create-or-link a login and get a copyable sign-in link WITHOUT any email
- * being sent — Pulse passes the link on through their own channel. If the
- * email already has a login, the person is linked to it and a set-password
- * link comes back instead. Pulse admin only.
- */
-export async function generatePersonLoginLink(
+export async function createOrLinkPersonLogin(
   person: Person,
   email: string,
-): Promise<{ action_link: string; existing: boolean }> {
+  password?: string,
+): Promise<{ action_link: string | null; existing: boolean; password_set: boolean }> {
   return invokeFunction('person-login-link', {
     person_id: person.id,
     email,
     full_name: `${person.first_name} ${person.last_name}`.trim(),
+    ...(password ? { password } : {}),
   })
 }
 

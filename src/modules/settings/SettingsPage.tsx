@@ -31,7 +31,7 @@ export default function SettingsPage() {
   const tabs: Array<{ key: TabKey; label: string; show: boolean }> = [
     { key: 'general', label: 'General', show: true },
     { key: 'xero', label: 'Xero', show: true },
-    { key: 'users', label: 'Users', show: isAdmin },
+    { key: 'users', label: 'Users', show: isAdmin || isCeo },
     { key: 'funds', label: 'Fund classification', show: isPulse },
     { key: 'security', label: 'Security', show: true },
   ]

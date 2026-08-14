@@ -24,9 +24,8 @@ import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import type { OnboardingStatus, OnboardingSubmission, Person } from '@/types/db'
 import { OnboardingStatusChip, PersonTypeChip } from './components'
 import {
-  createPersonLogin,
+  createOrLinkPersonLogin,
   docsFromSubmissions,
-  generatePersonLoginLink,
   fetchPerson,
   fetchSubmissions,
   revealBankDetails,
@@ -302,20 +301,20 @@ function SubmissionsCard({ submissions }: { submissions: OnboardingSubmission[] 
 
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const { isAdmin, isPayroll } = usePermissions()
+  const { isAdmin, isPayroll, isCeo } = usePermissions()
   const [editing, setEditing] = useState(false)
 
   const person = useSupabaseQuery(() => fetchPerson(id ?? ''), [id])
   const submissions = useSupabaseQuery(() => fetchSubmissions(id ?? ''), [id])
 
-  if (!isAdmin && !isPayroll) {
+  if (!isAdmin && !isPayroll && !isCeo) {
     return (
       <div>
         <PageHeader title="Person" subtitle="Employee and volunteer records" />
         <Card>
           <EmptyState
             title="People records are restricted"
-            hint="Only the Pulse payroll team and administrators can view this area."
+            hint="Only the Pulse payroll team, administrators and the CEO can view this area."
           />
         </Card>
       </div>
@@ -380,7 +379,9 @@ export default function PersonDetailPage() {
           </span>
         }
         actions={
-          editing ? null : (
+          // people updates are admin/payroll at RLS — the CEO gets a read-only
+          // record plus the login card
+          editing || (!isAdmin && !isPayroll) ? null : (
             <Button variant="ghost" onClick={() => setEditing(true)}>
               Edit details
             </Button>
@@ -445,7 +446,7 @@ export default function PersonDetailPage() {
 
         {/* Right — actions and sensitive material */}
         <div className="space-y-4">
-          <LoginCard person={p} isAdmin={isAdmin} onChanged={person.refetch} />
+          <LoginCard person={p} canManage={isAdmin || isCeo} onChanged={person.refetch} />
           <StatusCard person={p} onChanged={person.refetch} />
           {p.type === 'employee' ? (
             <BankCard person={p} />
@@ -648,43 +649,33 @@ function CopyField({ value, label }: { value: string; label: string }) {
 
 function LoginCard({
   person,
-  isAdmin,
+  canManage,
   onChanged,
 }: {
   person: Person
-  isAdmin: boolean
+  canManage: boolean
   onChanged: () => void
 }) {
   const [email, setEmail] = useState(person.email ?? '')
-  const [busy, setBusy] = useState<'email' | 'link' | null>(null)
-  const [sentEmail, setSentEmail] = useState(false)
+  const [busy, setBusy] = useState<'link' | 'password' | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
+  const [password, setPassword] = useState('')
   const [link, setLink] = useState<{ url: string; existing: boolean } | null>(null)
+  // The password that was just set, kept on screen once so it can be passed on.
+  const [passwordDone, setPasswordDone] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  const passwordValid = password.length >= 8
   const portalUrl = window.location.origin
-
-  async function inviteByEmail() {
-    setBusy('email')
-    setError(null)
-    try {
-      await createPersonLogin(person, email.trim().toLowerCase())
-      setSentEmail(true)
-      onChanged()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'The invite could not be sent')
-    } finally {
-      setBusy(null)
-    }
-  }
+  const targetEmail = (person.profile_id ? (person.email ?? email) : email).trim().toLowerCase()
 
   async function getLink() {
     setBusy('link')
     setError(null)
     try {
-      const targetEmail = (person.profile_id ? (person.email ?? email) : email).trim().toLowerCase()
-      const res = await generatePersonLoginLink(person, targetEmail)
-      setLink({ url: res.action_link, existing: res.existing })
+      const res = await createOrLinkPersonLogin(person, targetEmail)
+      if (res.action_link) setLink({ url: res.action_link, existing: res.existing })
       onChanged()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The link could not be generated')
@@ -692,6 +683,59 @@ function LoginCard({
       setBusy(null)
     }
   }
+
+  async function setPasswordNow() {
+    setBusy('password')
+    setError(null)
+    try {
+      await createOrLinkPersonLogin(person, targetEmail, password)
+      setPasswordDone(password)
+      setPassword('')
+      setShowPassword(false)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The password could not be set')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const passwordPanel = (label: string) => (
+    <div className="mt-2 space-y-2">
+      <Field label={label} hint="At least 8 characters. They can change it themselves once signed in.">
+        <Input
+          type="text"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="choose a password to hand over"
+          className="font-mono"
+          autoComplete="off"
+        />
+      </Field>
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={busy !== null || !emailValid || !passwordValid}
+          onClick={() => void setPasswordNow()}
+        >
+          {busy === 'password' ? 'Setting…' : 'Set this password'}
+        </Button>
+        <Button size="sm" variant="quiet" disabled={busy !== null} onClick={() => setShowPassword(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  )
+
+  const passwordConfirmation = passwordDone ? (
+    <div className="mt-3 space-y-1.5">
+      <p className="text-[12px] text-mint-900 leading-relaxed">
+        Password set — the login works right now. Pass it on securely (not by email alongside the
+        address) and encourage them to change it after first sign-in.
+      </p>
+      <CopyField value={passwordDone} label="password" />
+    </div>
+  ) : null
 
   return (
     <CardSection title="Expenses login">
@@ -707,7 +751,8 @@ function LoginCard({
             </div>
             <CopyField value={portalUrl} label="portal-address" />
           </div>
-          {isAdmin ? (
+          {passwordConfirmation}
+          {canManage && !passwordDone ? (
             <div className="mt-3">
               {link ? (
                 <div className="space-y-1.5">
@@ -720,31 +765,38 @@ function LoginCard({
                     it expires before they use it.
                   </p>
                 </div>
+              ) : showPassword ? (
+                passwordPanel('New password for this login')
               ) : (
                 <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full"
-                    disabled={busy !== null}
-                    onClick={() => void getLink()}
-                  >
-                    {busy === 'link' ? 'Generating…' : 'Get a set-password link to send yourself'}
-                  </Button>
+                  <div className="space-y-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full"
+                      disabled={busy !== null}
+                      onClick={() => void getLink()}
+                    >
+                      {busy === 'link' ? 'Generating…' : 'Get a set-password link to send yourself'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full"
+                      disabled={busy !== null}
+                      onClick={() => setShowPassword(true)}
+                    >
+                      Or set a new password now
+                    </Button>
+                  </div>
                   <p className="text-[10.5px] text-stone-400 mt-1.5">
-                    No email goes out — you copy the link and pass it on. Handy for a first sign-in
-                    or a forgotten password.
+                    No email goes out either way — you pass the link or password on yourself.
                   </p>
                 </>
               )}
             </div>
           ) : null}
         </>
-      ) : sentEmail ? (
-        <p className="text-[12px] text-mint-900 leading-relaxed">
-          Invite sent — they choose a password from the email link, and their expense history is
-          already waiting for them.
-        </p>
       ) : link ? (
         <div className="space-y-1.5">
           <p className="text-[12px] text-stone-700 leading-relaxed">
@@ -757,11 +809,14 @@ function LoginCard({
             Single-use and short-lived. Once they are set up they sign in at {portalUrl}.
           </p>
         </div>
-      ) : isAdmin ? (
+      ) : passwordDone ? (
+        passwordConfirmation
+      ) : canManage ? (
         <>
           <p className="text-[12px] text-stone-500 leading-relaxed mb-3">
-            No login yet. Create one so they can see their expense history and submit claims —
-            invite them by email, or take a link and send it yourself.
+            No login yet. Create one so they can see their expense history and submit claims — no
+            email is sent either way: copy a sign-up link to send yourself, or set a password and
+            hand it over directly.
           </p>
           <Field label="Email for the login">
             <Input
@@ -771,27 +826,31 @@ function LoginCard({
               placeholder="name@example.org"
             />
           </Field>
-          <div className="space-y-2 mt-3">
-            <Button
-              className="w-full"
-              disabled={busy !== null || !emailValid}
-              onClick={() => void getLink()}
-            >
-              {busy === 'link' ? 'Generating…' : 'Create login — copy a link to send yourself'}
-            </Button>
-            <Button
-              variant="ghost"
-              className="w-full"
-              disabled={busy !== null || !emailValid}
-              onClick={() => void inviteByEmail()}
-            >
-              {busy === 'email' ? 'Sending…' : 'Or send the invite email instead'}
-            </Button>
-          </div>
+          {showPassword ? (
+            passwordPanel('Password for the new login')
+          ) : (
+            <div className="space-y-2 mt-3">
+              <Button
+                className="w-full"
+                disabled={busy !== null || !emailValid}
+                onClick={() => void getLink()}
+              >
+                {busy === 'link' ? 'Generating…' : 'Create login — copy a link to send yourself'}
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full"
+                disabled={busy !== null || !emailValid}
+                onClick={() => setShowPassword(true)}
+              >
+                Or set a password yourself
+              </Button>
+            </div>
+          )}
         </>
       ) : (
         <p className="text-[12px] text-stone-500 leading-relaxed">
-          No login yet — the Pulse admin can create one from this page.
+          No login yet — the Pulse admin or the CEO can create one from this page.
         </p>
       )}
       {error ? (

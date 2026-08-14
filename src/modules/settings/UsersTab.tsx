@@ -36,7 +36,7 @@ import {
 import { Modal, RoleChip, SectionCard, Toggle } from './components'
 
 export default function UsersTab() {
-  const { isAdmin } = usePermissions()
+  const { isAdmin, isCeo } = usePermissions()
 
   const profilesQuery = useSupabaseQuery(() => fetchProfiles(), [])
   const fundsQuery = useSupabaseQuery(() => fetchAllFunds(), [])
@@ -46,10 +46,13 @@ export default function UsersTab() {
   const [editUser, setEditUser] = useState<Profile | null>(null)
   const [toggleError, setToggleError] = useState<string | null>(null)
 
-  if (!isAdmin) {
+  if (!isAdmin && !isCeo) {
     return (
       <Card>
-        <EmptyState title="Pulse admin only" hint="User management is restricted to the Pulse admin." />
+        <EmptyState
+          title="Restricted"
+          hint="User management is restricted to the Pulse admin and the CEO."
+        />
       </Card>
     )
   }
@@ -72,10 +75,14 @@ export default function UsersTab() {
       {/* Register */}
       <SectionCard
         title="Users"
-        hint="Invite-only — there is no open registration. Deactivating a user blocks sign-in and every RLS grant immediately."
+        hint={
+          isAdmin
+            ? 'Invite-only — there is no open registration. Deactivating a user blocks sign-in and every RLS grant immediately.'
+            : 'Add trustee and volunteer logins with a sign-up link or a password — nothing depends on email delivery.'
+        }
         actions={
           <Button size="sm" variant="primary" onClick={() => setInviteOpen(true)}>
-            Invite user
+            Add user
           </Button>
         }
       >
@@ -117,16 +124,22 @@ export default function UsersTab() {
                     <td className="td-register">{p.organisation === 'pulse' ? 'Pulse' : 'GAUFCC'}</td>
                     <td className="td-register figure whitespace-nowrap">{formatDate(p.created_at)}</td>
                     <td className="td-register">
-                      <Toggle on={p.active} onChange={() => void toggleActive(p)} label={`${p.full_name} active`} />
+                      {isAdmin ? (
+                        <Toggle on={p.active} onChange={() => void toggleActive(p)} label={`${p.full_name} active`} />
+                      ) : (
+                        <span className="text-[11px] text-stone-500">{p.active ? 'Active' : 'Inactive'}</span>
+                      )}
                     </td>
                     <td className="td-register">
-                      <button
-                        type="button"
-                        className="text-[11px] text-indigo underline underline-offset-2"
-                        onClick={() => setEditUser(p)}
-                      >
-                        Edit
-                      </button>
+                      {isAdmin ? (
+                        <button
+                          type="button"
+                          className="text-[11px] text-indigo underline underline-offset-2"
+                          onClick={() => setEditUser(p)}
+                        >
+                          Edit
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -136,42 +149,38 @@ export default function UsersTab() {
         )}
       </SectionCard>
 
-      {/* Fund-manager assignments */}
-      <SectionCard
-        title="Fund-manager assignments"
-        hint="Which funds each trustee can see. Whole-board trustees see every fund in reports and packs."
-      >
-        {managersQuery.loading && !managersQuery.data ? (
-          <LoadingRows cols={3} rows={4} />
-        ) : managersQuery.error ? (
-          <div className="p-5">
-            <ErrorNotice message={managersQuery.error} />
-          </div>
-        ) : trustees.length === 0 ? (
-          <EmptyState title="No trustees yet" hint="Invite a trustee first, then assign their funds here." />
-        ) : (
-          <AssignmentEditor
-            trustees={trustees}
-            funds={fundsQuery.data ?? []}
-            fundsLoading={fundsQuery.loading}
-            fundsError={fundsQuery.error}
-            assignments={managersQuery.data ?? []}
-            onSaved={() => managersQuery.refetch()}
-          />
-        )}
-      </SectionCard>
+      {/* Fund-manager assignments — admin-only writes at RLS */}
+      {isAdmin ? (
+        <SectionCard
+          title="Fund-manager assignments"
+          hint="Which funds each trustee can see. Whole-board trustees see every fund in reports and packs."
+        >
+          {managersQuery.loading && !managersQuery.data ? (
+            <LoadingRows cols={3} rows={4} />
+          ) : managersQuery.error ? (
+            <div className="p-5">
+              <ErrorNotice message={managersQuery.error} />
+            </div>
+          ) : trustees.length === 0 ? (
+            <EmptyState title="No trustees yet" hint="Invite a trustee first, then assign their funds here." />
+          ) : (
+            <AssignmentEditor
+              trustees={trustees}
+              funds={fundsQuery.data ?? []}
+              fundsLoading={fundsQuery.loading}
+              fundsError={fundsQuery.error}
+              assignments={managersQuery.data ?? []}
+              onSaved={() => managersQuery.refetch()}
+            />
+          )}
+        </SectionCard>
+      ) : null}
 
-      {/* Activity trail + AI interest summaries */}
-      <ActivitySection profiles={profiles} />
+      {/* Activity trail + AI interest summaries — admin-only reads at RLS */}
+      {isAdmin ? <ActivitySection profiles={profiles} /> : null}
 
       {inviteOpen ? (
-        <InviteModal
-          onClose={() => setInviteOpen(false)}
-          onInvited={() => {
-            setInviteOpen(false)
-            profilesQuery.refetch()
-          }}
-        />
+        <AddUserModal onClose={() => setInviteOpen(false)} onCreated={() => profilesQuery.refetch()} />
       ) : null}
       {editUser ? (
         <EditUserModal
@@ -426,40 +435,120 @@ function ActivitySection({ profiles }: { profiles: Profile[] }) {
   )
 }
 
-// ── Invite modal ─────────────────────────────────────────────────────────────
+// ── Add-user modal ───────────────────────────────────────────────────────────
 
-function InviteModal({ onClose, onInvited }: { onClose: () => void; onInvited: () => void }) {
+/** Small copy-to-clipboard row for the link/password the modal produces. */
+function CopyRow({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        readOnly
+        value={value}
+        onFocus={(e) => e.target.select()}
+        className="flex-1 min-w-0 rounded-lg border border-stone-200 bg-paper-2 px-2.5 py-1.5 font-mono text-[11px] text-stone-700"
+        aria-label="Copy value"
+      />
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => {
+          void navigator.clipboard.writeText(value).then(() => {
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1600)
+          })
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * Adds a user with no dependency on email delivery: 'link' mode returns a
+ * one-time sign-up link to pass on, 'password' mode creates the login ready
+ * to sign in with a password the caller hands over. The CEO is limited to
+ * trustee/submitter GAUFCC logins (the invite-user function enforces it too).
+ */
+function AddUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const { isAdmin } = usePermissions()
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState<Role>('trustee')
   const [organisation, setOrganisation] = useState<Organisation>('gaufcc')
+  const [mode, setMode] = useState<'link' | 'password'>('link')
+  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<{ link: string | null; password: string | null } | null>(null)
 
-  async function invite() {
+  const roleOptions = isAdmin ? ALL_ROLES : (['trustee', 'submitter'] as Role[])
+
+  async function create() {
     if (!email.trim() || !fullName.trim()) {
       setError('An email address and a full name are both needed')
+      return
+    }
+    if (mode === 'password' && password.length < 8) {
+      setError('The password needs at least 8 characters')
       return
     }
     setBusy(true)
     setError(null)
     try {
-      const res = await invokeFunction<{ ok: boolean }>('invite-user', {
+      const res = await invokeFunction<{ ok: boolean; action_link: string | null }>('invite-user', {
         email: email.trim(),
         full_name: fullName.trim(),
         role,
-        organisation,
+        organisation: isAdmin ? organisation : 'gaufcc',
+        mode,
+        ...(mode === 'password' ? { password } : {}),
       })
-      if (!res.ok) throw new Error('The invitation was not accepted by the server')
-      onInvited()
+      if (!res.ok) throw new Error('The request was not accepted by the server')
+      setDone({ link: res.action_link ?? null, password: mode === 'password' ? password : null })
+      onCreated()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'The invitation could not be sent')
+      setError(e instanceof Error ? e.message : 'The user could not be added')
+    } finally {
       setBusy(false)
     }
   }
 
+  if (done) {
+    return (
+      <Modal title="Login ready" onClose={onClose}>
+        <div className="space-y-3.5">
+          {done.link ? (
+            <>
+              <p className="text-[12.5px] text-stone-700 leading-relaxed">
+                Nothing was emailed. Send {fullName || 'them'} this one-time sign-up link through any
+                channel — it lets them choose their own password. It is single-use and short-lived;
+                you can generate a fresh one from their person record if it expires.
+              </p>
+              <CopyRow value={done.link} />
+            </>
+          ) : (
+            <>
+              <p className="text-[12.5px] text-stone-700 leading-relaxed">
+                The login works right now with the password below. Pass it on securely (not by email
+                alongside the address) and encourage them to change it after first sign-in.
+              </p>
+              <CopyRow value={done.password ?? ''} />
+            </>
+          )}
+          <div className="flex items-center justify-end pt-1">
+            <Button variant="primary" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    )
+  }
+
   return (
-    <Modal title="Invite a user" onClose={onClose}>
+    <Modal title="Add a user" onClose={onClose}>
       <div className="space-y-3.5">
         <Field label="Full name">
           <Input value={fullName} onChange={(e) => setFullName(e.target.value)} autoFocus />
@@ -470,27 +559,65 @@ function InviteModal({ onClose, onInvited }: { onClose: () => void; onInvited: (
         <div className="grid grid-cols-2 gap-3">
           <Field label="Role">
             <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-              {ALL_ROLES.map((r) => (
+              {roleOptions.map((r) => (
                 <option key={r} value={r}>
                   {ROLE_LABELS[r]}
                 </option>
               ))}
             </Select>
           </Field>
-          <Field label="Organisation">
-            <Select value={organisation} onChange={(e) => setOrganisation(e.target.value as Organisation)}>
-              <option value="gaufcc">GAUFCC</option>
-              <option value="pulse">Pulse</option>
-            </Select>
-          </Field>
+          {isAdmin ? (
+            <Field label="Organisation">
+              <Select value={organisation} onChange={(e) => setOrganisation(e.target.value as Organisation)}>
+                <option value="gaufcc">GAUFCC</option>
+                <option value="pulse">Pulse</option>
+              </Select>
+            </Field>
+          ) : null}
         </div>
+        <Field label="How they get in" hint="No email is sent either way — you pass the link or password on yourself.">
+          <div className="flex gap-1.5">
+            {(
+              [
+                ['link', 'Sign-up link to send'],
+                ['password', 'Set a password now'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setMode(value)}
+                className={cx(
+                  'rounded-full border px-3 py-1 text-[11px] font-medium transition-colors',
+                  mode === value
+                    ? 'border-indigo bg-indigo text-white'
+                    : 'border-stone-300 text-stone-600 hover:bg-paper-2',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Field>
+        {mode === 'password' ? (
+          <Field label="Password" hint="At least 8 characters. They can change it once signed in.">
+            <Input
+              type="text"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="choose a password to hand over"
+              className="font-mono"
+              autoComplete="off"
+            />
+          </Field>
+        ) : null}
         {error ? <ErrorNotice message={error} /> : null}
         <div className="flex items-center justify-end gap-2 pt-1">
           <Button variant="quiet" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={() => void invite()} disabled={busy}>
-            {busy ? 'Sending…' : 'Send invitation'}
+          <Button variant="primary" onClick={() => void create()} disabled={busy}>
+            {busy ? 'Creating…' : mode === 'link' ? 'Create login & get link' : 'Create login with password'}
           </Button>
         </div>
       </div>

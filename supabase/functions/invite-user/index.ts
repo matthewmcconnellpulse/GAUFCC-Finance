@@ -1,17 +1,20 @@
 /**
- * invite-user — send a Supabase invite email and set up the profile.
+ * invite-user — add a portal user WITHOUT depending on email delivery
+ * (JWT-verified; pulse_admin or ceo). Two modes via body.mode:
  *
- * JWT-verified; pulse_admin ONLY. Body { email, full_name, role,
- * organisation, person_id? }. Sends the invite via
- * auth.admin.inviteUserByEmail with a redirect to
- * <origin or SITE_URL>/reset-password, then upserts the profiles row with the
- * requested role/organisation (the signup trigger will have created it with
- * defaults), and audit-logs 'user_invited'.
+ *  - 'link' (default): the user is created silently (generateLink type
+ *    'invite') and a one-time set-password link comes back for the caller to
+ *    send through their own channel. Nothing is emailed.
+ *  - 'password': the caller supplies the password; the user is created ready
+ *    to sign in (email confirmed) and no link is needed.
  *
- * person_id links an employee/volunteer record: people.profile_id is set to
- * the new user so their expense history and onboarding data follow the login.
+ * Privilege guard: a pulse_admin can create any role; the ceo can only
+ * create 'submitter' and 'trustee' logins in the 'gaufcc' organisation —
+ * the CEO must not be able to mint Pulse or CEO logins.
  *
- * Returns { ok: true }.
+ * Body { email, full_name, role, organisation, person_id?, mode?, password? }.
+ * person_id links an employee/volunteer record so their history follows the
+ * login. Returns { ok: true, action_link? }.
  */
 
 import { handleOptions, json, errorResponse } from '../_shared/http.ts'
@@ -26,6 +29,7 @@ const ROLES: Role[] = [
   'trustee',
   'submitter',
 ]
+const CEO_ROLES: Role[] = ['trustee', 'submitter']
 const ORGANISATIONS = ['pulse', 'gaufcc'] as const
 
 function isEmail(value: string): boolean {
@@ -38,9 +42,10 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405)
 
   const caller = await getCaller(req)
-  if (!callerHasRole(caller, ['pulse_admin'])) {
+  if (!callerHasRole(caller, ['pulse_admin', 'ceo'])) {
     return errorResponse('Not authorised', 403)
   }
+  const callerIsCeo = caller.role === 'ceo'
 
   const body = (await req.json().catch(() => null)) as
     | {
@@ -49,6 +54,8 @@ Deno.serve(async (req) => {
         role?: unknown
         organisation?: unknown
         person_id?: unknown
+        mode?: unknown
+        password?: unknown
       }
     | null
   const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : ''
@@ -56,6 +63,8 @@ Deno.serve(async (req) => {
   const role = body?.role
   const organisation = body?.organisation
   const personId = typeof body?.person_id === 'string' ? body.person_id : null
+  const mode = body?.mode === 'password' ? 'password' : 'link'
+  const password = typeof body?.password === 'string' ? body.password : null
 
   if (!isEmail(email)) return errorResponse('A valid email address is required')
   if (!fullName || fullName.length > 200) return errorResponse('full_name is required')
@@ -68,26 +77,57 @@ Deno.serve(async (req) => {
   ) {
     return errorResponse("organisation must be 'pulse' or 'gaufcc'")
   }
+  if (callerIsCeo && (!CEO_ROLES.includes(role as Role) || organisation !== 'gaufcc')) {
+    return errorResponse('The CEO can only add trustee and submitter logins for GAUFCC', 403)
+  }
+  if (mode === 'password' && (!password || password.length < 8 || password.length > 72)) {
+    return errorResponse('The password needs to be 8–72 characters')
+  }
 
   const origin = req.headers.get('origin') ?? Deno.env.get('SITE_URL') ?? null
   const redirectTo = origin ? `${origin.replace(/\/+$/, '')}/reset-password` : undefined
 
   const svc = serviceClient()
-  const { data: invited, error: inviteError } = await svc.auth.admin.inviteUserByEmail(email, {
-    data: { full_name: fullName },
-    ...(redirectTo ? { redirectTo } : {}),
-  })
-  if (inviteError) {
-    const message = /already/i.test(inviteError.message)
-      ? 'A user with this email address already exists'
-      : `Could not send the invite: ${inviteError.message}`
-    return errorResponse(message, 422)
-  }
-  const userId = invited?.user?.id
-  if (!userId) return errorResponse('The invite was sent but no user id was returned', 500)
+  let userId: string | null = null
+  let actionLink: string | null = null
 
-  // The auth signup trigger creates the profile with defaults — apply the
-  // requested role and organisation on top.
+  if (mode === 'password') {
+    const created = await svc.auth.admin.createUser({
+      email,
+      password: password as string,
+      email_confirm: true,
+      user_metadata: { full_name: fullName },
+    })
+    if (created.error) {
+      const message = /already/i.test(created.error.message)
+        ? 'A user with this email address already exists'
+        : `The login could not be created: ${created.error.message}`
+      return errorResponse(message, 422)
+    }
+    userId = created.data.user?.id ?? null
+  } else {
+    const invite = await svc.auth.admin.generateLink({
+      type: 'invite',
+      email,
+      options: {
+        data: { full_name: fullName },
+        ...(redirectTo ? { redirectTo } : {}),
+      },
+    })
+    if (invite.error) {
+      const message = /already|registered|exists/i.test(invite.error.message)
+        ? 'A user with this email address already exists'
+        : `The login could not be created: ${invite.error.message}`
+      return errorResponse(message, 422)
+    }
+    userId = invite.data.user?.id ?? null
+    actionLink = invite.data.properties?.action_link ?? null
+    if (!actionLink) return errorResponse('No sign-up link came back — try again', 500)
+  }
+  if (!userId) return errorResponse('The login was created but no user id was returned', 500)
+
+  // Apply the requested role and organisation on top of the signup trigger's
+  // defaults.
   const { error: profileError } = await svc.from('profiles').upsert(
     {
       id: userId,
@@ -101,7 +141,7 @@ Deno.serve(async (req) => {
   )
   if (profileError) {
     return errorResponse(
-      `The invite was sent but the profile could not be updated: ${profileError.message}`,
+      `The login was created but the profile could not be updated: ${profileError.message}`,
       500,
     )
   }
@@ -114,7 +154,7 @@ Deno.serve(async (req) => {
       .eq('id', personId)
     if (personError) {
       return errorResponse(
-        `The invite was sent but the person record could not be linked: ${personError.message}`,
+        `The login was created but the person record could not be linked: ${personError.message}`,
         500,
       )
     }
@@ -125,9 +165,9 @@ Deno.serve(async (req) => {
     action: 'user_invited',
     entity: 'profiles',
     entity_id: userId,
-    after: { email, full_name: fullName, role, organisation, person_id: personId },
+    after: { email, full_name: fullName, role, organisation, person_id: personId, mode }, // never the password
     ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
   })
 
-  return json({ ok: true })
+  return json({ ok: true, action_link: actionLink })
 })
