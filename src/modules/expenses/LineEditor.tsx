@@ -71,41 +71,51 @@ export function LineCard({
         {line.receipt_storage_path ? (
           <ReceiptThumb path={line.receipt_storage_path} className="w-[42px] h-[52px] shrink-0" />
         ) : null}
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            {editable ? (
-              <input
-                className="flex-1 min-w-[160px] bg-transparent border-b border-transparent hover:border-stone-300 focus:border-stone-400 focus:outline-none text-[13px] text-ink py-0.5"
-                value={descText}
-                placeholder="What was this for?"
-                onChange={(e) => setDescText(e.target.value)}
-                onBlur={() => {
-                  const v = descText.trim()
-                  if (v !== line.description) onPatch({ description: v })
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur()
-                }}
-                aria-label="Line description"
-              />
-            ) : (
-              <span className="text-[13px] text-ink">{line.description || 'Untitled line'}</span>
-            )}
-            {line.ai_extraction != null ? <AiBadge confidence={line.ai_confidence} /> : null}
-            {editable && onDelete ? (
-              <button
-                type="button"
-                onClick={onDelete}
-                className="ml-auto text-stone-400 hover:text-danger-ink p-1 rounded-control"
-                title="Remove line"
-                aria-label="Remove line"
-              >
-                <XIcon />
-              </button>
-            ) : null}
+        <div className="flex-1 min-w-0 space-y-3">
+          <div className="flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              {editable ? (
+                <Field label="Description">
+                  <Input
+                    value={descText}
+                    placeholder="What is being claimed? e.g. Train to London — safeguarding training"
+                    onChange={(e) => setDescText(e.target.value)}
+                    onBlur={() => {
+                      const v = descText.trim()
+                      if (v !== line.description) onPatch({ description: v })
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
+                    className="py-1.5 text-[13px]"
+                  />
+                </Field>
+              ) : (
+                <Field label="Description">
+                  <span className="block text-[13px] text-ink py-1.5">
+                    {line.description || 'Untitled line'}
+                  </span>
+                </Field>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
+              {line.ai_extraction != null ? <AiBadge confidence={line.ai_confidence} /> : null}
+              {editable && onDelete ? (
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  className="text-stone-400 hover:text-danger-ink p-1 rounded-control"
+                  title="Remove line"
+                  aria-label="Remove line"
+                >
+                  <XIcon />
+                </button>
+              ) : null}
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+          {/* Category and Fund carry long names — they get the widest row. */}
+          <div className="grid grid-cols-1 sm:grid-cols-[150px_1fr_1fr] gap-3">
             <Field label="Date">
               {editable ? (
                 <Input
@@ -170,53 +180,54 @@ export function LineCard({
                 </span>
               )}
             </Field>
-            <div className="grid grid-cols-3 gap-2">
-              <Field label="Net">
-                {editable ? (
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    value={netText}
-                    onChange={(e) => setNetText(e.target.value)}
-                    onBlur={() => commitAmounts(netText, vatText)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') e.currentTarget.blur()
-                    }}
-                    className="py-1.5 text-[12px] font-mono"
-                  />
-                ) : (
-                  <span className="block font-mono text-[12px] text-ink py-1.5 text-right">
-                    {line.net.toFixed(2)}
-                  </span>
-                )}
-              </Field>
-              <Field label="VAT">
-                {editable || coding ? (
-                  <Input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    value={vatText}
-                    onChange={(e) => setVatText(e.target.value)}
-                    onBlur={() => commitAmounts(netText, vatText)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') e.currentTarget.blur()
-                    }}
-                    className="py-1.5 text-[12px] font-mono"
-                  />
-                ) : (
-                  <span className="block font-mono text-[12px] text-ink py-1.5 text-right">
-                    {line.vat.toFixed(2)}
-                  </span>
-                )}
-              </Field>
-              <Field label="Gross" hint={editable ? 'net + VAT' : undefined}>
-                <span className="block font-mono text-[12.5px] font-medium text-ink py-1.5 text-right">
-                  {(editable || coding ? gross : line.gross).toFixed(2)}
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 sm:max-w-[440px]">
+            <Field label="Net">
+              {editable ? (
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={netText}
+                  onChange={(e) => setNetText(e.target.value)}
+                  onBlur={() => commitAmounts(netText, vatText)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                  }}
+                  className="py-1.5 text-[12px] font-mono"
+                />
+              ) : (
+                <span className="block font-mono text-[12px] text-ink py-1.5 text-right">
+                  {line.net.toFixed(2)}
                 </span>
-              </Field>
-            </div>
+              )}
+            </Field>
+            <Field label="VAT">
+              {editable || coding ? (
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={vatText}
+                  onChange={(e) => setVatText(e.target.value)}
+                  onBlur={() => commitAmounts(netText, vatText)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                  }}
+                  className="py-1.5 text-[12px] font-mono"
+                />
+              ) : (
+                <span className="block font-mono text-[12px] text-ink py-1.5 text-right">
+                  {line.vat.toFixed(2)}
+                </span>
+              )}
+            </Field>
+            <Field label="Gross" hint={editable ? 'net + VAT' : undefined}>
+              <span className="block font-mono text-[12.5px] font-medium text-ink py-1.5 text-right">
+                {(editable || coding ? gross : line.gross).toFixed(2)}
+              </span>
+            </Field>
           </div>
 
           {extraction?.suggested_category && !line.category && categories.length > 0 ? (
