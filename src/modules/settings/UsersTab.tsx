@@ -29,9 +29,11 @@ import {
   fetchFundManagers,
   fetchProfiles,
   fetchUserActivity,
+  reissueLoginLink,
   ROLE_LABELS,
   saveFundManagerAssignments,
   setProfileActive,
+  setUserPassword,
   updateProfile,
 } from './lib'
 import { Modal, RoleChip, SectionCard, Toggle } from './components'
@@ -197,6 +199,108 @@ export default function UsersTab() {
   )
 }
 
+// ── Sign-in help (re-issue access for an existing login) ────────────────────
+
+/**
+ * For when an invite went stale: sign-up links are one-time and expire, and
+ * any generated before the URL configuration was fixed point at localhost.
+ * Offers a fresh set-password link to copy, or setting a password directly.
+ * Hidden for pulse_admin targets — the server refuses those anyway.
+ */
+function SignInHelp({ user }: { user: Profile }) {
+  const [link, setLink] = useState<string | null>(null)
+  const [pwOpen, setPwOpen] = useState(false)
+  const [password, setPassword] = useState('')
+  const [pwDone, setPwDone] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function getLink() {
+    setBusy(true)
+    setError(null)
+    setPwOpen(false)
+    setPwDone(false)
+    try {
+      setLink(await reissueLoginLink(user.email))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The link could not be created')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function savePassword() {
+    if (password.length < 8) {
+      setError('The password needs at least 8 characters')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await setUserPassword(user.email, password)
+      setPwOpen(false)
+      setPassword('')
+      setPwDone(true)
+      setLink(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The password could not be set')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-stone-200 bg-paper-2 p-3.5 space-y-2.5">
+      <p className="text-[11px] font-semibold text-ink">Sign-in help</p>
+      <p className="text-[11px] leading-relaxed text-stone-600">
+        If their invite link expired or never worked, hand them a fresh one — links are one-time
+        and last 24 hours — or set a password for them directly. Nothing is emailed.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="ghost" onClick={() => void getLink()} disabled={busy}>
+          {busy && !pwOpen ? 'Creating…' : 'New sign-in link'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            setPwOpen((v) => !v)
+            setLink(null)
+            setPwDone(false)
+            setError(null)
+          }}
+          disabled={busy}
+        >
+          Set a password…
+        </Button>
+      </div>
+      {link ? <CopyRow value={link} /> : null}
+      {pwOpen ? (
+        <div className="flex items-center gap-2">
+          <Input
+            type="text"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="new password to hand over"
+            className="font-mono flex-1"
+            autoComplete="off"
+          />
+          <Button size="sm" variant="primary" onClick={() => void savePassword()} disabled={busy}>
+            {busy ? 'Saving…' : 'Set'}
+          </Button>
+        </div>
+      ) : null}
+      {pwDone ? (
+        <p className="text-[11px] text-stone-600">
+          Done — the password works right now. Pass it on securely and suggest they change it once
+          in.
+        </p>
+      ) : null}
+      {error ? <ErrorNotice message={error} /> : null}
+    </div>
+  )
+}
+
 // ── Edit user ────────────────────────────────────────────────────────────────
 
 function EditUserModal({
@@ -291,6 +395,10 @@ function EditUserModal({
           Role changes take effect on their next page load and are audit-logged. Access follows the
           role immediately — no re-invite needed.
         </p>
+
+        {isSelf || user.role === 'pulse_admin' || !user.active ? null : (
+          <SignInHelp user={user} />
+        )}
 
         {isSelf ? null : (
           <div className="rounded-xl border border-red-200 bg-red-50/60 p-3.5 space-y-2.5">

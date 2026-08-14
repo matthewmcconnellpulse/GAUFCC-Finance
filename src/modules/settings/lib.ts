@@ -113,6 +113,25 @@ export async function deleteUser(id: string): Promise<void> {
   await invokeFunction('delete-user', { user_id: id })
 }
 
+/**
+ * Fresh one-time set-password link for an existing login — for invites that
+ * expired, got used, or predate the URL-configuration fix. Refused for
+ * pulse_admin targets.
+ */
+export async function reissueLoginLink(email: string): Promise<string> {
+  const res = await invokeFunction<{ ok: boolean; action_link: string | null }>('invite-user', {
+    email,
+    mode: 'relink',
+  })
+  if (!res.action_link) throw new Error('No link came back — try again')
+  return res.action_link
+}
+
+/** Set a new password on an existing login directly. Refused for pulse_admin targets. */
+export async function setUserPassword(email: string, password: string): Promise<void> {
+  await invokeFunction('invite-user', { email, mode: 'repassword', password })
+}
+
 export const ROLE_LABELS: Record<Role, string> = {
   pulse_admin: 'Pulse admin',
   pulse_bookkeeper: 'Pulse bookkeeper',

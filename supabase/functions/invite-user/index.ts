@@ -7,6 +7,12 @@
  *    send through their own channel. Nothing is emailed.
  *  - 'password': the caller supplies the password; the user is created ready
  *    to sign in (email confirmed) and no link is needed.
+ *  - 'relink': for an EXISTING login — a fresh one-time set-password link,
+ *    because invite links are single-use and expire (and any generated before
+ *    the URL-configuration fix bounce to localhost).
+ *  - 'repassword': for an EXISTING login — set a new password directly.
+ *    Both re-issue modes refuse pulse_admin targets outright; the CEO only
+ *    reaches trustee/submitter logins.
  *
  * Privilege guard: a pulse_admin can create any role; the ceo can only
  * create 'submitter' and 'trustee' logins in the 'gaufcc' organisation —
@@ -63,10 +69,79 @@ Deno.serve(async (req) => {
   const role = body?.role
   const organisation = body?.organisation
   const personId = typeof body?.person_id === 'string' ? body.person_id : null
-  const mode = body?.mode === 'password' ? 'password' : 'link'
+  const mode =
+    body?.mode === 'password' || body?.mode === 'relink' || body?.mode === 'repassword'
+      ? body.mode
+      : 'link'
   const password = typeof body?.password === 'string' ? body.password : null
 
   if (!isEmail(email)) return errorResponse('A valid email address is required')
+
+  const origin = req.headers.get('origin') ?? Deno.env.get('SITE_URL') ?? null
+  const redirectTo = origin ? `${origin.replace(/\/+$/, '')}/reset-password` : undefined
+  const svc = serviceClient()
+
+  // ── Re-issue for an EXISTING login ─────────────────────────────────────────
+  // 'relink' returns a fresh one-time set-password link (the old one may have
+  // expired, been used, or predate the URL configuration fix); 'repassword'
+  // sets a new password directly. Takeover guard: the CEO only reaches
+  // trustee/submitter logins, and nobody — admin included — can re-issue for
+  // a pulse_admin; admins use the ordinary "Forgotten password?" flow.
+  if (mode === 'relink' || mode === 'repassword') {
+    if (mode === 'repassword' && (!password || password.length < 8 || password.length > 72)) {
+      return errorResponse('The password needs to be 8–72 characters')
+    }
+    const { data: target, error: lookupError } = await svc
+      .from('profiles')
+      .select('id, role, active, full_name')
+      .eq('email', email)
+      .maybeSingle()
+    if (lookupError) return errorResponse(lookupError.message, 500)
+    if (!target) return errorResponse('No login exists for this email address', 404)
+    if (!target.active) {
+      return errorResponse('This login is archived — restore it before re-issuing access', 409)
+    }
+    if (target.role === 'pulse_admin') {
+      return errorResponse(
+        'Pulse admin logins cannot be re-issued from here — use "Forgotten password?" on the login page',
+        403,
+      )
+    }
+    if (callerIsCeo && !CEO_ROLES.includes(target.role as Role)) {
+      return errorResponse('The CEO can only re-issue trustee and submitter logins', 403)
+    }
+
+    let link: string | null = null
+    if (mode === 'relink') {
+      const recovery = await svc.auth.admin.generateLink({
+        type: 'recovery',
+        email,
+        ...(redirectTo ? { options: { redirectTo } } : {}),
+      })
+      if (recovery.error) {
+        return errorResponse(`The link could not be created: ${recovery.error.message}`, 500)
+      }
+      link = recovery.data.properties?.action_link ?? null
+      if (!link) return errorResponse('No link came back — try again', 500)
+    } else {
+      const { error } = await svc.auth.admin.updateUserById(target.id, {
+        password: password as string,
+      })
+      if (error) return errorResponse(`The password could not be set: ${error.message}`, 500)
+    }
+
+    await auditLog(svc, {
+      actor_id: caller.userId,
+      action: mode === 'relink' ? 'user_login_link_reissued' : 'user_password_set',
+      entity: 'profiles',
+      entity_id: target.id,
+      after: { email, role: target.role }, // never the password or the link
+      ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+    })
+
+    return json({ ok: true, action_link: link })
+  }
+
   if (!fullName || fullName.length > 200) return errorResponse('full_name is required')
   if (typeof role !== 'string' || !ROLES.includes(role as Role)) {
     return errorResponse('role is not valid')
@@ -84,10 +159,6 @@ Deno.serve(async (req) => {
     return errorResponse('The password needs to be 8–72 characters')
   }
 
-  const origin = req.headers.get('origin') ?? Deno.env.get('SITE_URL') ?? null
-  const redirectTo = origin ? `${origin.replace(/\/+$/, '')}/reset-password` : undefined
-
-  const svc = serviceClient()
   let userId: string | null = null
   let actionLink: string | null = null
 
