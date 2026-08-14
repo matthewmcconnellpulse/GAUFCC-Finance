@@ -4,7 +4,7 @@
  * fund-manager assignment editor that drives per-fund trustee visibility.
  */
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { usePermissions } from '@/auth/AuthProvider'
+import { useAuth, usePermissions } from '@/auth/AuthProvider'
 import {
   AiBadge,
   Button,
@@ -24,6 +24,7 @@ import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import type { Fund, Organisation, Profile, Role, UserActivityRow } from '@/types/db'
 import {
   ALL_ROLES,
+  deleteUser,
   fetchAllFunds,
   fetchFundManagers,
   fetchProfiles,
@@ -212,6 +213,9 @@ function EditUserModal({
   const [organisation, setOrganisation] = useState<Organisation>(user.organisation)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const { profile: me } = useAuth()
+  const isSelf = user.id === me?.id
 
   async function save() {
     if (!fullName.trim()) {
@@ -225,6 +229,31 @@ function EditUserModal({
       onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The user could not be updated')
+      setBusy(false)
+    }
+  }
+
+  async function archive(active: boolean) {
+    setBusy(true)
+    setError(null)
+    try {
+      await setProfileActive(user.id, active)
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The change could not be saved')
+      setBusy(false)
+    }
+  }
+
+  async function removeForever() {
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteUser(user.id)
+      onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The user could not be deleted')
+      setConfirmDelete(false)
       setBusy(false)
     }
   }
@@ -262,6 +291,56 @@ function EditUserModal({
           Role changes take effect on their next page load and are audit-logged. Access follows the
           role immediately — no re-invite needed.
         </p>
+
+        {isSelf ? null : (
+          <div className="rounded-xl border border-red-200 bg-red-50/60 p-3.5 space-y-2.5">
+            <p className="text-[11px] font-semibold text-red-900">Archive or delete</p>
+            {confirmDelete ? (
+              <>
+                <p className="text-[11px] leading-relaxed text-red-900">
+                  Permanently delete {user.full_name || user.email}'s login? This cannot be undone.
+                  It only works for users with no history — anyone who has submitted expenses or
+                  touched records is refused and should be archived instead.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)} disabled={busy}>
+                    Keep the user
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => void removeForever()}
+                    disabled={busy}
+                    className="rounded-full bg-red-700 px-3.5 py-1.5 text-[11px] font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+                  >
+                    {busy ? 'Deleting…' : 'Delete permanently'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-[11px] leading-relaxed text-stone-600">
+                  Archiving blocks sign-in and every data grant immediately, but keeps their name on
+                  historic claims and records — it can be undone any time. Deleting removes the
+                  login entirely and is only possible while they have no history.
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => void archive(!user.active)} disabled={busy}>
+                    {user.active ? 'Archive user' : 'Restore user'}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={busy}
+                    className="text-[11px] font-medium text-red-700 underline underline-offset-2 hover:text-red-900 disabled:opacity-50"
+                  >
+                    Delete permanently…
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {error ? <ErrorNotice message={error} /> : null}
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>

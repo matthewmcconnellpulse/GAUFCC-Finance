@@ -18,7 +18,7 @@ import {
   Select,
   cx,
 } from '@/components/ui'
-import { formatDate, formatMoney, formatPeriod } from '@/lib/format'
+import { currentPeriod, formatDate, formatMoney, formatPeriod } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import type { ClaimStatus } from '@/types/db'
 import {
@@ -35,6 +35,7 @@ import {
   fetchActiveProfiles,
   fetchClaims,
   periodOptions,
+  sendExpenseReminders,
   type ClaimWithSubmitter,
 } from './lib'
 
@@ -181,6 +182,7 @@ function AllClaimsView() {
         subtitle="Every claim across the Assembly — filter by status and period"
         actions={
           <>
+            {isAdmin || isCeo ? <RemindClaimants /> : null}
             {canRaiseOnBehalf ? <NewClaimFor /> : null}
             <Button variant={isCeo ? 'primary' : 'ghost'} onClick={() => navigate('/expenses/approvals')}>
               Approval queue
@@ -289,6 +291,68 @@ function ClaimRow({ claim, onOpen }: { claim: ClaimWithSubmitter; onOpen: () => 
 }
 
 /**
+ * "Remind claimants" — emails everyone who plausibly has expenses (active
+ * submitters + recent claimants) and hasn't submitted for the chosen month.
+ * Draft holders are nudged to finish; already-submitted people are skipped.
+ */
+function RemindClaimants() {
+  const [open, setOpen] = useState(false)
+  const [period, setPeriod] = useState(currentPeriod())
+  const [sending, setSending] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const send = async () => {
+    if (sending || !/^\d{4}-\d{2}$/.test(period)) return
+    setSending(true)
+    setError(null)
+    setResult(null)
+    try {
+      const { sent, skipped } = await sendExpenseReminders(period)
+      setResult(
+        sent === 0
+          ? `Nobody to remind — ${skipped} ${skipped === 1 ? 'person has' : 'people have'} already submitted.`
+          : `Reminder sent to ${sent} ${sent === 1 ? 'person' : 'people'}${skipped > 0 ? ` · ${skipped} already submitted` : ''}.`,
+      )
+      setOpen(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The reminders could not be sent')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <span className="relative inline-flex flex-col items-end gap-1">
+      {open ? (
+        <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+          <input
+            type="month"
+            value={period}
+            disabled={sending}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="input-base !w-auto py-1.5 text-[12px]"
+            aria-label="Month to remind about"
+          />
+          <Button size="sm" variant="primary" onClick={() => void send()} disabled={sending}>
+            {sending ? 'Sending…' : 'Email everyone unsubmitted'}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={sending}>
+            Cancel
+          </Button>
+        </span>
+      ) : (
+        <Button variant="ghost" onClick={() => { setResult(null); setOpen(true) }}>
+          Remind claimants…
+        </Button>
+      )}
+      {result ? <span className="text-[10.5px] text-stone-500">{result}</span> : null}
+      {error ? <span className="text-[10.5px] text-danger-ink max-w-[300px] text-right">{error}</span> : null}
+    </span>
+  )
+}
+
+/**
  * "New claim for…" — Pulse raises a draft claim on someone's behalf, so paper
  * receipts handed to the office land in the same central place. People need a
  * login first (People → their record → Create login): claims belong to users.
@@ -296,16 +360,18 @@ function ClaimRow({ claim, onOpen }: { claim: ClaimWithSubmitter; onOpen: () => 
 function NewClaimFor() {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [profileId, setProfileId] = useState('')
+  const [period, setPeriod] = useState(currentPeriod())
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const people = useSupabaseQuery(() => (open ? fetchActiveProfiles() : Promise.resolve([])), [open])
 
-  const start = async (profileId: string) => {
+  const start = async () => {
     if (!profileId || starting) return
     setStarting(true)
     setError(null)
     try {
-      const claim = await createClaim(profileId)
+      const claim = await createClaim(profileId, period)
       navigate(`/expenses/${claim.id}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not start the claim')
@@ -316,24 +382,40 @@ function NewClaimFor() {
   return (
     <span className="relative inline-flex flex-col items-end gap-1">
       {open ? (
-        <Select
-          autoFocus
-          defaultValue=""
-          disabled={starting}
-          onChange={(e) => void start(e.target.value)}
-          onBlur={() => setOpen(false)}
-          className="!w-auto py-1.5 text-[12px]"
-          aria-label="Raise a claim on behalf of"
-        >
-          <option value="" disabled>
-            {starting ? 'Starting…' : 'Claim on behalf of…'}
-          </option>
-          {(people.data ?? []).map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.full_name}
+        <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+          <Select
+            autoFocus
+            value={profileId}
+            disabled={starting}
+            onChange={(e) => setProfileId(e.target.value)}
+            className="!w-auto py-1.5 text-[12px]"
+            aria-label="Raise a claim on behalf of"
+          >
+            <option value="" disabled>
+              Claim on behalf of…
             </option>
-          ))}
-        </Select>
+            {(people.data ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.full_name}
+              </option>
+            ))}
+          </Select>
+          <input
+            type="month"
+            value={period}
+            disabled={starting}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="input-base !w-auto py-1.5 text-[12px]"
+            aria-label="Claim month"
+            title="The month the claim belongs to — pick a past month for late expenses"
+          />
+          <Button size="sm" variant="primary" onClick={() => void start()} disabled={starting || !profileId}>
+            {starting ? 'Starting…' : 'Start'}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={starting}>
+            Cancel
+          </Button>
+        </span>
       ) : (
         <Button variant="ghost" onClick={() => setOpen(true)}>
           New claim for…

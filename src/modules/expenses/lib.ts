@@ -229,14 +229,28 @@ export async function fetchActiveProfiles(): Promise<
   return (data ?? []) as Array<{ id: string; full_name: string; role: string }>
 }
 
-export async function createClaim(submitterId: string): Promise<ExpenseClaim> {
+export async function createClaim(submitterId: string, period?: string): Promise<ExpenseClaim> {
   const { data, error } = await supabase
     .from('expense_claims')
-    .insert({ submitter_id: submitterId, status: 'draft', period: currentPeriod(), total: 0 })
+    .insert({
+      submitter_id: submitterId,
+      status: 'draft',
+      period: period && /^\d{4}-\d{2}$/.test(period) ? period : currentPeriod(),
+      total: 0,
+    })
     .select()
     .single()
   if (error) throw new Error(error.message)
   return data as ExpenseClaim
+}
+
+/**
+ * Email a nudge to everyone who plausibly has expenses for the period and
+ * hasn't submitted yet (active submitters + recent claimants; draft holders
+ * are told to finish the draft). Admin/CEO only — enforced server-side.
+ */
+export async function sendExpenseReminders(period: string): Promise<{ sent: number; skipped: number }> {
+  return invokeFunction<{ sent: number; skipped: number }>('expense-reminders', { period })
 }
 
 export async function updateClaim(id: string, patch: Partial<ExpenseClaim>): Promise<void> {

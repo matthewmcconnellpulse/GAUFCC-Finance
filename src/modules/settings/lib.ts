@@ -3,7 +3,7 @@
  * sync runs, user administration, fund-manager assignments, the fund
  * classification queue and the audit log. Module-owned.
  */
-import { supabase } from '@/lib/supabase'
+import { invokeFunction, supabase } from '@/lib/supabase'
 import type { AuditLogEntry,
   Fund,
   FundManager,
@@ -103,6 +103,14 @@ export async function fetchUserActivity(days: number): Promise<UserActivityRow[]
 export async function setProfileActive(id: string, active: boolean): Promise<void> {
   const { error } = await supabase.from('profiles').update({ active }).eq('id', id)
   if (error) throw new Error(error.message)
+}
+
+/**
+ * Permanently remove a login. The server refuses (409 with an explanation)
+ * when the user has financial history — archive via setProfileActive instead.
+ */
+export async function deleteUser(id: string): Promise<void> {
+  await invokeFunction('delete-user', { user_id: id })
 }
 
 export const ROLE_LABELS: Record<Role, string> = {
