@@ -26,6 +26,7 @@
 import { handleOptions, json, errorResponse } from '../_shared/http.ts'
 import { getCaller, callerHasRole, serviceClient, type Role } from '../_shared/auth.ts'
 import { auditLog } from '../_shared/audit.ts'
+import { brandedLink } from '../_shared/links.ts'
 
 const ROLES: Role[] = [
   'pulse_admin',
@@ -121,7 +122,7 @@ Deno.serve(async (req) => {
       if (recovery.error) {
         return errorResponse(`The link could not be created: ${recovery.error.message}`, 500)
       }
-      link = recovery.data.properties?.action_link ?? null
+      link = brandedLink(origin, recovery.data.properties, 'recovery')
       if (!link) return errorResponse('No link came back — try again', 500)
     } else {
       const { error } = await svc.auth.admin.updateUserById(target.id, {
@@ -192,7 +193,7 @@ Deno.serve(async (req) => {
       return errorResponse(message, 422)
     }
     userId = invite.data.user?.id ?? null
-    actionLink = invite.data.properties?.action_link ?? null
+    actionLink = brandedLink(origin, invite.data.properties, 'invite')
     if (!actionLink) return errorResponse('No sign-up link came back — try again', 500)
   }
   if (!userId) return errorResponse('The login was created but no user id was returned', 500)

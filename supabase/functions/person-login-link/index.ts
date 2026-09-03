@@ -23,6 +23,7 @@
 import { handleOptions, json, errorResponse } from '../_shared/http.ts'
 import { getCaller, callerHasRole, serviceClient } from '../_shared/auth.ts'
 import { auditLog } from '../_shared/audit.ts'
+import { brandedLink } from '../_shared/links.ts'
 
 const UNPRIVILEGED_ROLES = ['submitter', 'trustee']
 
@@ -98,7 +99,7 @@ Deno.serve(async (req) => {
       if (recovery.error) {
         return errorResponse(`A set-password link could not be generated: ${recovery.error.message}`, 500)
       }
-      actionLink = recovery.data.properties?.action_link ?? null
+      actionLink = brandedLink(origin, recovery.data.properties, 'recovery')
     }
     // Deliberately no profile upsert: the login's role must not be touched —
     // linking the person record below is enough.
@@ -129,7 +130,7 @@ Deno.serve(async (req) => {
       return errorResponse(`The login could not be created: ${invite.error.message}`, 500)
     }
     userId = invite.data.user?.id ?? null
-    actionLink = invite.data.properties?.action_link ?? null
+    actionLink = brandedLink(origin, invite.data.properties, 'invite')
   }
 
   if (!userId || (!actionLink && !passwordSet)) {
