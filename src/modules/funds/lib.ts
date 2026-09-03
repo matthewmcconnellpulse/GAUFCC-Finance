@@ -177,17 +177,40 @@ export interface PlRow {
   amount: number
 }
 
+export type BalanceSheetClass = 'ASSET' | 'LIABILITY' | 'EQUITY'
+
+export const BALANCE_SHEET_CLASSES: ReadonlySet<string> = new Set<BalanceSheetClass>([
+  'ASSET',
+  'LIABILITY',
+  'EQUITY',
+])
+
+export interface BalanceSheetRow {
+  class: BalanceSheetClass
+  account_code: string
+  account_name: string
+  amount: number
+}
+
 export interface PlSummary {
   income: PlRow[]
   expenditure: PlRow[]
+  /**
+   * Lines coded to ASSET / LIABILITY / EQUITY accounts tagged with the fund —
+   * investment purchases and sales, transfers, debtors, creditors. They never
+   * move the fund balance (v_fund_balances counts REVENUE and EXPENSE only) so
+   * they must not be shown as income or expenditure.
+   */
+  balanceSheet: BalanceSheetRow[]
   totalIncome: number
   totalExpenditure: number
 }
 
 /**
  * Presentation-level P&L: group by account, classify income vs expenditure by
- * the account's Xero class (REVENUE = income) with a source-type fallback for
- * unmapped codes. Authoritative period figures come from v_fund_monthly /
+ * the account's Xero class (REVENUE = income, EXPENSE = expenditure) with a
+ * source-type fallback for unmapped codes; balance sheet classes are set
+ * aside. Authoritative period figures come from v_fund_monthly /
  * v_fund_balances — this view exists for the drill-down narrative.
  */
 export function buildPl(
@@ -205,24 +228,36 @@ export function buildPl(
   }
   const income: PlRow[] = []
   const expenditure: PlRow[] = []
+  const balanceSheet: BalanceSheetRow[] = []
   for (const [code, entry] of sums) {
     const account = accounts.get(code)
-    const isIncome = account?.class
-      ? account.class.toUpperCase() === 'REVENUE'
-      : entry.incomeVotes * 2 >= entry.total
+    const cls = account?.class?.toUpperCase() ?? null
+    const name = account?.name ?? (code === '—' ? 'Uncoded' : `Account ${code}`)
+    if (cls && BALANCE_SHEET_CLASSES.has(cls)) {
+      balanceSheet.push({
+        class: cls as BalanceSheetClass,
+        account_code: code,
+        account_name: name,
+        amount: Math.abs(entry.net),
+      })
+      continue
+    }
+    const isIncome = cls ? cls === 'REVENUE' : entry.incomeVotes * 2 >= entry.total
     const row: PlRow = {
       sorp: account?.sorp ?? null,
       account_code: code,
-      account_name: account?.name ?? (code === '—' ? 'Uncoded' : `Account ${code}`),
+      account_name: name,
       amount: Math.abs(entry.net),
     }
     ;(isIncome ? income : expenditure).push(row)
   }
   income.sort((a, b) => b.amount - a.amount)
   expenditure.sort((a, b) => b.amount - a.amount)
+  balanceSheet.sort((a, b) => b.amount - a.amount)
   return {
     income,
     expenditure,
+    balanceSheet,
     totalIncome: income.reduce((s, r) => s + r.amount, 0),
     totalExpenditure: expenditure.reduce((s, r) => s + r.amount, 0),
   }

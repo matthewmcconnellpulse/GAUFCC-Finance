@@ -86,9 +86,17 @@ Deno.serve(async (req) => {
       )
     }
     userId = existingProfile.id
+    // An invite-created login stays "email unconfirmed" until its link is
+    // used, and unconfirmed logins cannot sign in with a password at all.
+    // Handing access over in person vouches for the address — confirm it.
+    const confirm = await svc.auth.admin.updateUserById(userId, {
+      email_confirm: true,
+      ...(password ? { password } : {}),
+    })
+    if (confirm.error) {
+      return errorResponse(`The login could not be updated: ${confirm.error.message}`, 500)
+    }
     if (password) {
-      const { error } = await svc.auth.admin.updateUserById(userId, { password })
-      if (error) return errorResponse(`The password could not be set: ${error.message}`, 500)
       passwordSet = true
     } else {
       const recovery = await svc.auth.admin.generateLink({

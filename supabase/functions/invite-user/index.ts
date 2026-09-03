@@ -112,6 +112,21 @@ Deno.serve(async (req) => {
       return errorResponse('The CEO can only re-issue trustee and submitter logins', 403)
     }
 
+    // A login created from an invite link stays "email unconfirmed" until that
+    // link is used — and an unconfirmed login cannot sign in with a password
+    // at all ("Email not confirmed"). The admin is handing access over in
+    // person here, which vouches for the address, so confirm it now.
+    const confirm = await svc.auth.admin.updateUserById(target.id, {
+      email_confirm: true,
+      ...(mode === 'repassword' ? { password: password as string } : {}),
+    })
+    if (confirm.error) {
+      return errorResponse(
+        `The ${mode === 'repassword' ? 'password' : 'login'} could not be updated: ${confirm.error.message}`,
+        500,
+      )
+    }
+
     let link: string | null = null
     if (mode === 'relink') {
       const recovery = await svc.auth.admin.generateLink({
@@ -124,11 +139,6 @@ Deno.serve(async (req) => {
       }
       link = brandedLink(origin, recovery.data.properties, 'recovery')
       if (!link) return errorResponse('No link came back — try again', 500)
-    } else {
-      const { error } = await svc.auth.admin.updateUserById(target.id, {
-        password: password as string,
-      })
-      if (error) return errorResponse(`The password could not be set: ${error.message}`, 500)
     }
 
     await auditLog(svc, {

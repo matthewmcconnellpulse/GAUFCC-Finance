@@ -31,6 +31,7 @@ import FundNotesCard from './FundNotesCard'
 import { PeriodSelect } from './components'
 import {
   addFundManager,
+  BALANCE_SHEET_CLASSES,
   buildPl,
   cumulativeBalances,
   fetchAccountMap,
@@ -42,6 +43,7 @@ import {
   removeFundManager,
   resolveTrackingOptionIds,
   sourceTypeLabel,
+  type BalanceSheetRow,
   type FundManagerRow,
   type Period,
   type PlRow,
@@ -89,7 +91,7 @@ export default function FundDetailPage() {
   const [period, setPeriod] = useState<Period>(() => ({ preset: 'fy', ...presetRange('fy') }))
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<PageSize>(25)
-  const [classFilter, setClassFilter] = useState<'' | 'REVENUE' | 'EXPENSE'>('')
+  const [classFilter, setClassFilter] = useState<'' | 'REVENUE' | 'EXPENSE' | 'BALANCE'>('')
 
   useEffect(() => {
     setPage(0)
@@ -186,7 +188,13 @@ export default function FundDetailPage() {
     // codes of the requested class and constrain the query to them.
     const classCodes =
       classFilter && accounts.data
-        ? [...accounts.data.entries()].filter(([, a]) => a.class === classFilter).map(([c]) => c)
+        ? [...accounts.data.entries()]
+            .filter(([, a]) =>
+              classFilter === 'BALANCE'
+                ? a.class != null && BALANCE_SHEET_CLASSES.has(a.class.toUpperCase())
+                : a.class === classFilter,
+            )
+            .map(([c]) => c)
         : null
     const buildQuery = () => {
       let q = supabase
@@ -365,26 +373,41 @@ export default function FundDetailPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2 mb-5">
-        {/* P&L */}
-        <Card>
-          <div className="px-5 py-4">
-            <SectionLabel>Income and expenditure</SectionLabel>
-            {plRows.loading || accounts.loading ? (
-              <LoadingRows cols={2} rows={5} />
-            ) : plRows.error ? (
-              <ErrorNotice message={`The period figures could not be loaded — ${plRows.error}`} />
-            ) : plRows.data?.unlinked ? (
-              <EmptyState
-                title="Not linked to Xero yet"
-                hint="This fund has no tracking option linked, so no transactions can be shown. Pulse can link it from the classification queue."
-              />
-            ) : pl && (pl.income.length > 0 || pl.expenditure.length > 0) ? (
-              <PlTable pl={pl} />
-            ) : (
-              <EmptyState title="No transactions in this period" hint="Try a wider period." />
-            )}
-          </div>
-        </Card>
+        {/* P&L, with balance sheet movements set apart beneath it */}
+        <div className="space-y-4">
+          <Card>
+            <div className="px-5 py-4">
+              <SectionLabel>Income and expenditure</SectionLabel>
+              {plRows.loading || accounts.loading ? (
+                <LoadingRows cols={2} rows={5} />
+              ) : plRows.error ? (
+                <ErrorNotice message={`The period figures could not be loaded — ${plRows.error}`} />
+              ) : plRows.data?.unlinked ? (
+                <EmptyState
+                  title="Not linked to Xero yet"
+                  hint="This fund has no tracking option linked, so no transactions can be shown. Pulse can link it from the classification queue."
+                />
+              ) : pl && (pl.income.length > 0 || pl.expenditure.length > 0) ? (
+                <PlTable pl={pl} />
+              ) : pl && pl.balanceSheet.length > 0 ? (
+                <EmptyState
+                  title="No income or expenditure in this period"
+                  hint="Only balance sheet movements — see below."
+                />
+              ) : (
+                <EmptyState title="No transactions in this period" hint="Try a wider period." />
+              )}
+            </div>
+          </Card>
+          {pl && pl.balanceSheet.length > 0 ? (
+            <Card>
+              <div className="px-5 py-4">
+                <SectionLabel>Balance sheet items</SectionLabel>
+                <BalanceSheetTable rows={pl.balanceSheet} />
+              </div>
+            </Card>
+          ) : null}
+        </div>
 
         {/* Balance history */}
         <Card>
@@ -411,6 +434,7 @@ export default function FundDetailPage() {
               ['', 'All'],
               ['REVENUE', 'Income'],
               ['EXPENSE', 'Expenditure'],
+              ['BALANCE', 'Balance sheet'],
             ] as const).map(([value, label]) => (
               <button
                 key={label}
@@ -710,6 +734,50 @@ function PlTable({ pl }: { pl: ReturnType<typeof buildPl> }) {
           {formatMovement(net)}
         </span>
       </div>
+    </div>
+  )
+}
+
+const BALANCE_SHEET_LABELS: Record<BalanceSheetRow['class'], string> = {
+  ASSET: 'Assets',
+  LIABILITY: 'Liabilities',
+  EQUITY: 'Equity',
+}
+
+/**
+ * Movements on balance sheet accounts tagged with this fund. Kept apart from
+ * the P&L because they don't change the fund balance — an investment purchase
+ * swaps cash for a holding; it is not expenditure.
+ */
+function BalanceSheetTable({ rows }: { rows: BalanceSheetRow[] }) {
+  const groups = (['ASSET', 'LIABILITY', 'EQUITY'] as const)
+    .map((cls) => ({ cls, rows: rows.filter((r) => r.class === cls) }))
+    .filter((g) => g.rows.length > 0)
+  return (
+    <div className="text-[12.5px]">
+      {groups.map((group) => (
+        <div key={group.cls} className="mb-3 last:mb-0">
+          <div className="text-[10px] font-medium uppercase tracking-[.12em] text-stone-500 pb-1.5 border-b border-stone-150">
+            {BALANCE_SHEET_LABELS[group.cls]}
+          </div>
+          <ul>
+            {group.rows.map((r) => (
+              <li key={r.account_code} className="flex justify-between gap-4 py-1.5 pl-3 border-b border-paper-3">
+                <span className="text-stone-700 truncate">
+                  <span className="font-mono text-[10.5px] text-stone-500 mr-1.5">{r.account_code}</span>
+                  {r.account_name}
+                </span>
+                <span className="figure text-[11.5px] whitespace-nowrap">{formatMoney(r.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      <p className="text-[10.5px] text-stone-500 mt-3 leading-relaxed">
+        Movements in the period on asset, liability and equity accounts coded to this fund — investment
+        purchases and sales, transfers, debtors and creditors. These do not form part of income and
+        expenditure and do not change the fund balance.
+      </p>
     </div>
   )
 }
