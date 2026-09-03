@@ -30,6 +30,7 @@ export default function GeneralTab() {
 
   const [approvalDay, setApprovalDay] = useState<number | null>(null)
   const [paymentDay, setPaymentDay] = useState<number | null>(null)
+  const [mileageRate, setMileageRate] = useState<number | null>(null)
   const [warnings, setWarnings] = useState<WarningRules | null>(null)
   const [saving, setSaving] = useState<'days' | 'warnings' | null>(null)
   const [saved, setSaved] = useState<'days' | 'warnings' | null>(null)
@@ -40,6 +41,7 @@ export default function GeneralTab() {
     if (!query.data) return
     setApprovalDay(settingValue<number>(query.data, SETTING_KEYS.expenseApprovalDay, 10))
     setPaymentDay(settingValue<number>(query.data, SETTING_KEYS.paymentRunDay, 17))
+    setMileageRate(settingValue<number>(query.data, SETTING_KEYS.mileageRatePence, 45))
     setWarnings(
       settingValue<WarningRules>(query.data, SETTING_KEYS.warningDefaults, {
         min_balance: null,
@@ -60,6 +62,9 @@ export default function GeneralTab() {
     try {
       await updateSettingValue(SETTING_KEYS.expenseApprovalDay, approvalDay)
       await updateSettingValue(SETTING_KEYS.paymentRunDay, paymentDay)
+      if (mileageRate != null && mileageRate >= 0) {
+        await updateSettingValue(SETTING_KEYS.mileageRatePence, mileageRate)
+      }
       setSaved('days')
       query.refetch()
     } catch (e) {
@@ -140,6 +145,21 @@ export default function GeneralTab() {
                   </option>
                 ))}
               </Select>
+            </Field>
+            <Field
+              label="Mileage rate (pence per mile)"
+              hint="Offered on every new mileage line. HMRC's approved rate is 45p for the first 10,000 business miles — set the charity's own if it differs."
+            >
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.5"
+                min="0"
+                value={mileageRate ?? 45}
+                disabled={!canEditDays}
+                onChange={(e) => setMileageRate(Number(e.target.value))}
+                className="input-base font-mono"
+              />
             </Field>
           </div>
           {approvalDay != null && paymentDay != null && paymentDay <= approvalDay ? (

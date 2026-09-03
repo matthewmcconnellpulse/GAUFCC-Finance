@@ -250,6 +250,13 @@ export interface ExpenseClaim {
   ceo_comment: string | null
   xero_bill_id: string | null
   submitted_at: string | null
+  /** Set when a reviewer hands the claim back for amendment (status → draft). */
+  review_note: string | null
+  returned_by: string | null
+  returned_at: string | null
+  /** Archived claims are hidden from the working lists; fully reversible. */
+  archived_at: string | null
+  archived_by: string | null
   created_at: string
   updated_at: string
 }
@@ -278,6 +285,10 @@ export interface ExpenseLine {
   receipt_storage_path: string | null
   ai_extraction: AiExtraction | null
   ai_confidence: number | null // 0–1
+  /** Mileage lines: amount = miles × rate; the rate is frozen on the line. */
+  is_mileage: boolean
+  miles: number | null
+  mileage_rate_pence: number | null
   created_at: string
   updated_at: string
 }
@@ -464,6 +475,7 @@ export const SETTING_KEYS = {
   paymentRunDay: 'payment_run_day', // default 17
   syncHour: 'sync_hour', // default 4 (Europe/London)
   warningDefaults: 'warning_defaults',
+  mileageRatePence: 'mileage_rate_pence', // default 45 (HMRC approved rate)
 } as const
 
 export interface UserActivityRow {

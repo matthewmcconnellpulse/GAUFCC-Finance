@@ -9,7 +9,10 @@ import { formatMoney } from '@/lib/format'
 import type { ExpenseLine } from '@/types/db'
 import { ReceiptThumb, UploadIcon, XIcon } from './components'
 import {
+  DEFAULT_MILEAGE_RATE_PENCE,
   isLowConfidence,
+  mileageAmount,
+  mileageDescription,
   needsConfirmation,
   round2,
   type CategoryOption,
@@ -20,11 +23,14 @@ import {
 /** full = draft owner · coding = Pulse bookkeeper on a submitted claim · read = everyone else */
 export type LineMode = 'full' | 'coding' | 'read'
 
+const round1 = (n: number) => Math.round(n * 10) / 10
+
 export function LineCard({
   line,
   categories,
   funds,
   mode,
+  mileageRatePence = DEFAULT_MILEAGE_RATE_PENCE,
   onPatch,
   onDelete,
   onConfirm,
@@ -33,6 +39,8 @@ export function LineCard({
   categories: CategoryOption[]
   funds: FundOption[]
   mode: LineMode
+  /** Company pence-per-mile rate, offered as the default on new mileage lines. */
+  mileageRatePence?: number
   onPatch: (patch: Partial<ExpenseLine>) => void
   onDelete?: () => void
   onConfirm?: () => void
@@ -41,9 +49,13 @@ export function LineCard({
   const [netText, setNetText] = useState(String(line.net ?? 0))
   const [vatText, setVatText] = useState(String(line.vat ?? 0))
   const [descText, setDescText] = useState(line.description ?? '')
+  const [milesText, setMilesText] = useState(line.miles != null && line.miles !== 0 ? String(line.miles) : '')
+  const [rateText, setRateText] = useState(String(line.mileage_rate_pence ?? mileageRatePence))
 
   const editable = mode === 'full'
   const coding = mode === 'coding'
+  // Pulse may correct the money on a submitted/approved claim right up to the push
+  const amountsEditable = editable || coding
   const unconfirmed = needsConfirmation(line)
   const lowConfidence = isLowConfidence(line)
   const extraction = line.ai_extraction as StoredExtraction | null
@@ -58,7 +70,63 @@ export function LineCard({
     }
   }
 
-  const gross = round2((Number.parseFloat(netText) || 0) + (Number.parseFloat(vatText) || 0))
+  // Mileage: the amount is derived, VAT is nil, and an untouched description
+  // is kept in step ("Mileage — 42 miles @ 45p").
+  const commitMileage = (milesStr: string, rateStr: string) => {
+    const miles = Math.max(0, round1(Number.parseFloat(milesStr) || 0))
+    const rate = Math.max(0, round2(Number.parseFloat(rateStr) || 0))
+    setMilesText(miles ? String(miles) : '')
+    setRateText(String(rate))
+    const amount = mileageAmount(miles, rate)
+    setNetText(String(amount))
+    setVatText('0')
+    const patch: Partial<ExpenseLine> = { miles, mileage_rate_pence: rate, net: amount, vat: 0, gross: amount }
+    if (!descText.trim() || /^Mileage — /.test(descText)) {
+      const d = mileageDescription(miles, rate)
+      setDescText(d)
+      if (d !== line.description) patch.description = d
+    }
+    if (
+      miles !== (line.miles ?? 0) ||
+      rate !== line.mileage_rate_pence ||
+      amount !== line.gross ||
+      patch.description !== undefined
+    ) {
+      onPatch(patch)
+    }
+  }
+
+  const toggleMileage = (on: boolean) => {
+    if (!on) {
+      onPatch({ is_mileage: false })
+      return
+    }
+    const rate = line.mileage_rate_pence ?? mileageRatePence
+    const miles = line.miles ?? 0
+    const amount = mileageAmount(miles, rate)
+    setRateText(String(rate))
+    setMilesText(miles ? String(miles) : '')
+    setNetText(String(amount))
+    setVatText('0')
+    const patch: Partial<ExpenseLine> = {
+      is_mileage: true,
+      miles,
+      mileage_rate_pence: rate,
+      net: amount,
+      vat: 0,
+      gross: amount,
+    }
+    if (!descText.trim()) {
+      const d = mileageDescription(miles, rate)
+      setDescText(d)
+      patch.description = d
+    }
+    onPatch(patch)
+  }
+
+  const gross = line.is_mileage
+    ? mileageAmount(Number.parseFloat(milesText) || 0, Number.parseFloat(rateText) || 0)
+    : round2((Number.parseFloat(netText) || 0) + (Number.parseFloat(vatText) || 0))
 
   return (
     <div
@@ -99,6 +167,11 @@ export function LineCard({
               )}
             </div>
             <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
+              {line.is_mileage && !editable ? (
+                <span className="rounded-full bg-indigo/8 border border-indigo/20 px-2 py-0.5 text-[10.5px] text-indigo">
+                  Mileage
+                </span>
+              ) : null}
               {line.ai_extraction != null ? <AiBadge confidence={line.ai_confidence} /> : null}
               {editable && onDelete ? (
                 <button
@@ -113,6 +186,18 @@ export function LineCard({
               ) : null}
             </div>
           </div>
+
+          {editable ? (
+            <label className="inline-flex items-center gap-2 text-[11.5px] text-stone-700 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={line.is_mileage}
+                onChange={(e) => toggleMileage(e.target.checked)}
+                className="accent-indigo"
+              />
+              Mileage claim — miles × rate, no receipt needed
+            </label>
+          ) : null}
 
           {/* Category and Fund carry long names — they get the widest row. */}
           <div className="grid grid-cols-1 sm:grid-cols-[150px_1fr_1fr] gap-3">
@@ -182,9 +267,64 @@ export function LineCard({
             </Field>
           </div>
 
+          {line.is_mileage ? (
+            <div className="grid grid-cols-3 gap-3 sm:max-w-[440px]">
+              <Field label="Miles">
+                {amountsEditable ? (
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.1"
+                    min="0"
+                    value={milesText}
+                    placeholder="0"
+                    onChange={(e) => setMilesText(e.target.value)}
+                    onBlur={() => commitMileage(milesText, rateText)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
+                    className="py-1.5 text-[12px] font-mono"
+                  />
+                ) : (
+                  <span className="block font-mono text-[12px] text-ink py-1.5 text-right">
+                    {(line.miles ?? 0).toFixed(1)}
+                  </span>
+                )}
+              </Field>
+              <Field
+                label="Rate (p/mile)"
+                hint={amountsEditable ? `company rate ${mileageRatePence}p` : undefined}
+              >
+                {amountsEditable ? (
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.5"
+                    min="0"
+                    value={rateText}
+                    onChange={(e) => setRateText(e.target.value)}
+                    onBlur={() => commitMileage(milesText, rateText)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
+                    className="py-1.5 text-[12px] font-mono"
+                  />
+                ) : (
+                  <span className="block font-mono text-[12px] text-ink py-1.5 text-right">
+                    {line.mileage_rate_pence ?? '—'}
+                  </span>
+                )}
+              </Field>
+              <Field label="Amount" hint={amountsEditable ? 'miles × rate, no VAT' : undefined}>
+                <span className="block font-mono text-[12.5px] font-medium text-ink py-1.5 text-right">
+                  {(amountsEditable ? gross : line.gross).toFixed(2)}
+                </span>
+              </Field>
+            </div>
+          ) : (
           <div className="grid grid-cols-3 gap-3 sm:max-w-[440px]">
             <Field label="Net">
-              {editable ? (
+              {amountsEditable ? (
                 <Input
                   type="number"
                   inputMode="decimal"
@@ -204,7 +344,7 @@ export function LineCard({
               )}
             </Field>
             <Field label="VAT">
-              {editable || coding ? (
+              {amountsEditable ? (
                 <Input
                   type="number"
                   inputMode="decimal"
@@ -223,12 +363,13 @@ export function LineCard({
                 </span>
               )}
             </Field>
-            <Field label="Gross" hint={editable ? 'net + VAT' : undefined}>
+            <Field label="Gross" hint={amountsEditable ? 'net + VAT' : undefined}>
               <span className="block font-mono text-[12.5px] font-medium text-ink py-1.5 text-right">
-                {(editable || coding ? gross : line.gross).toFixed(2)}
+                {(amountsEditable ? gross : line.gross).toFixed(2)}
               </span>
             </Field>
           </div>
+          )}
 
           {extraction?.suggested_category && !line.category && categories.length > 0 ? (
             <div className="text-[10.5px] text-stone-500 mt-2">

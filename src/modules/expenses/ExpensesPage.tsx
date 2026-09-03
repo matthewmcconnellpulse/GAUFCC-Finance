@@ -140,7 +140,7 @@ function MyClaimsView() {
 
 // ── Pulse / CEO view ─────────────────────────────────────────────────────────
 
-type StatusFilter = 'all' | ClaimStatus
+type StatusFilter = 'all' | ClaimStatus | 'archived'
 
 const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'all', label: 'All' },
@@ -150,6 +150,7 @@ const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
   { value: 'rejected', label: 'Rejected' },
   { value: 'pushed_to_xero', label: 'Pushed' },
   { value: 'paid', label: 'Paid' },
+  { value: 'archived', label: 'Archived' },
 ]
 
 function AllClaimsView() {
@@ -160,17 +161,19 @@ function AllClaimsView() {
   const [periodFilter, setPeriodFilter] = useState<string>('all')
   const canRaiseOnBehalf = isAdmin || isBookkeeper
 
-  const claims = useSupabaseQuery(() => fetchClaims(), [])
+  const claims = useSupabaseQuery(() => fetchClaims({ archived: 'include' }), [])
   const queueCount = useSupabaseQuery(countSubmittedClaims, [])
 
   const periods = useMemo(() => periodOptions(claims.data ?? []), [claims.data])
 
+  // Archived claims live only behind their own filter; every other view is
+  // the working list.
   const visible = useMemo(() => {
-    return (claims.data ?? []).filter(
-      (c) =>
-        (statusFilter === 'all' || c.status === statusFilter) &&
-        (periodFilter === 'all' || c.period === periodFilter),
-    )
+    return (claims.data ?? []).filter((c) => {
+      if (periodFilter !== 'all' && c.period !== periodFilter) return false
+      if (statusFilter === 'archived') return c.archived_at != null
+      return c.archived_at == null && (statusFilter === 'all' || c.status === statusFilter)
+    })
   }, [claims.data, statusFilter, periodFilter])
 
   const count = queueCount.data ?? 0
@@ -182,6 +185,9 @@ function AllClaimsView() {
         subtitle="Every claim across the Assembly — filter by status and period"
         actions={
           <>
+            <Button variant="ghost" onClick={() => navigate('/expenses/report')}>
+              Report
+            </Button>
             {isAdmin || isCeo ? <RemindClaimants /> : null}
             {canRaiseOnBehalf ? <NewClaimFor /> : null}
             <Button variant={isCeo ? 'primary' : 'ghost'} onClick={() => navigate('/expenses/approvals')}>
@@ -284,7 +290,10 @@ function ClaimRow({ claim, onOpen }: { claim: ClaimWithSubmitter; onOpen: () => 
         {formatMoney(claim.total)}
       </td>
       <td className="td-register">
-        <ClaimStatusChip status={claim.status} />
+        <span className="inline-flex items-center gap-1.5">
+          <ClaimStatusChip status={claim.status} />
+          {claim.archived_at ? <span className="text-[10.5px] text-stone-500">archived</span> : null}
+        </span>
       </td>
     </tr>
   )

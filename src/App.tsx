@@ -19,6 +19,7 @@ const ReportsPage = lazy(() => import('@/modules/reports/ReportsPage'))
 const ExpensesPage = lazy(() => import('@/modules/expenses/ExpensesPage'))
 const ClaimDetailPage = lazy(() => import('@/modules/expenses/ClaimDetailPage'))
 const ApprovalQueuePage = lazy(() => import('@/modules/expenses/ApprovalQueuePage'))
+const ExpensesReportPage = lazy(() => import('@/modules/expenses/ExpensesReportPage'))
 const PeoplePage = lazy(() => import('@/modules/people/PeoplePage'))
 const PersonDetailPage = lazy(() => import('@/modules/people/PersonDetailPage'))
 const OnboardingFormPage = lazy(() => import('@/modules/people/OnboardingFormPage'))
@@ -85,6 +86,7 @@ export default function App() {
               <Route path="financials/cashflow" element={<Page><CashflowPage /></Page>} />
               <Route path="expenses" element={<Page><ExpensesPage /></Page>} />
               <Route path="expenses/approvals" element={<Page><ApprovalQueuePage /></Page>} />
+              <Route path="expenses/report" element={<Page><ExpensesReportPage /></Page>} />
               <Route path="expenses/:id" element={<Page><ClaimDetailPage /></Page>} />
               <Route path="people" element={<Page><PeoplePage /></Page>} />
               <Route path="people/:id" element={<Page><PersonDetailPage /></Page>} />

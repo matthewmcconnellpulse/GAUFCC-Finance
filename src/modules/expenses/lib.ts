@@ -160,7 +160,13 @@ export interface SubmitterInfo {
   email: string | null
 }
 
-export type ClaimWithSubmitter = ExpenseClaim & { submitter: SubmitterInfo | null }
+export type ClaimWithSubmitter = ExpenseClaim & {
+  submitter: SubmitterInfo | null
+  /** Whoever approved or rejected (ceo_approved_by), when known. */
+  approver: SubmitterInfo | null
+  /** Whoever returned the claim for amendment (returned_by), when known. */
+  returner: SubmitterInfo | null
+}
 
 /**
  * Names are attached with a second profiles query rather than an embedded
@@ -168,7 +174,13 @@ export type ClaimWithSubmitter = ExpenseClaim & { submitter: SubmitterInfo | nul
  * hide profiles from some viewers — names degrade to a dash, never an error.
  */
 async function attachSubmitters(claims: ExpenseClaim[]): Promise<ClaimWithSubmitter[]> {
-  const ids = [...new Set(claims.map((c) => c.submitter_id))]
+  const ids = [
+    ...new Set(
+      claims
+        .flatMap((c) => [c.submitter_id, c.ceo_approved_by, c.returned_by])
+        .filter((v): v is string => Boolean(v)),
+    ),
+  ]
   const map = new Map<string, SubmitterInfo>()
   if (ids.length > 0) {
     try {
@@ -180,13 +192,20 @@ async function attachSubmitters(claims: ExpenseClaim[]): Promise<ClaimWithSubmit
       // tolerated — the claim list still renders
     }
   }
-  return claims.map((c) => ({ ...c, submitter: map.get(c.submitter_id) ?? null }))
+  return claims.map((c) => ({
+    ...c,
+    submitter: map.get(c.submitter_id) ?? null,
+    approver: c.ceo_approved_by ? (map.get(c.ceo_approved_by) ?? null) : null,
+    returner: c.returned_by ? (map.get(c.returned_by) ?? null) : null,
+  }))
 }
 
 export interface ClaimFilters {
   submitterId?: string
   statuses?: ClaimStatus[]
   period?: string
+  /** Archived claims are out of the working lists unless asked for. */
+  archived?: 'exclude' | 'include' | 'only'
 }
 
 export async function fetchClaims(filters: ClaimFilters = {}): Promise<ClaimWithSubmitter[]> {
@@ -194,6 +213,9 @@ export async function fetchClaims(filters: ClaimFilters = {}): Promise<ClaimWith
   if (filters.submitterId) q = q.eq('submitter_id', filters.submitterId)
   if (filters.statuses && filters.statuses.length > 0) q = q.in('status', filters.statuses)
   if (filters.period) q = q.eq('period', filters.period)
+  const archived = filters.archived ?? 'exclude'
+  if (archived === 'exclude') q = q.is('archived_at', null)
+  if (archived === 'only') q = q.not('archived_at', 'is', null)
   const { data, error } = await q
   if (error) throw new Error(error.message)
   return attachSubmitters((data ?? []) as ExpenseClaim[])
@@ -212,8 +234,100 @@ export async function countSubmittedClaims(): Promise<number> {
     .from('expense_claims')
     .select('id', { count: 'exact', head: true })
     .eq('status', 'submitted')
+    .is('archived_at', null)
   if (error) throw new Error(error.message)
   return count ?? 0
+}
+
+// ── Review actions ───────────────────────────────────────────────────────────
+
+/**
+ * Hand a claim back to the claimant with a note. The guard trigger stamps
+ * returned_by/returned_at and clears any CEO approval; the claimant amends
+ * and resubmits.
+ */
+export async function returnClaim(id: string, note: string): Promise<void> {
+  await updateClaim(id, { status: 'draft', review_note: note.trim() })
+}
+
+/** Hide a claim from the working lists without losing anything. */
+export async function archiveClaim(id: string, byProfileId: string): Promise<void> {
+  await updateClaim(id, { archived_at: new Date().toISOString(), archived_by: byProfileId })
+}
+
+export async function unarchiveClaim(id: string): Promise<void> {
+  await updateClaim(id, { archived_at: null, archived_by: null })
+}
+
+// ── Mileage ──────────────────────────────────────────────────────────────────
+
+export const DEFAULT_MILEAGE_RATE_PENCE = 45
+
+/** Company pence-per-mile rate from settings (HMRC's 45p unless overridden). */
+export async function fetchMileageRatePence(): Promise<number> {
+  try {
+    const { data, error } = await supabase
+      .from('settings')
+      .select('value')
+      .eq('key', SETTING_KEYS.mileageRatePence)
+      .maybeSingle()
+    if (error) throw new Error(error.message)
+    const v = Number((data as { value: unknown } | null)?.value)
+    return Number.isFinite(v) && v >= 0 ? v : DEFAULT_MILEAGE_RATE_PENCE
+  } catch {
+    return DEFAULT_MILEAGE_RATE_PENCE
+  }
+}
+
+export function mileageAmount(miles: number, ratePence: number): number {
+  return round2((miles * ratePence) / 100)
+}
+
+export function mileageDescription(miles: number, ratePence: number): string {
+  const rate = Number.isInteger(ratePence) ? String(ratePence) : ratePence.toFixed(2)
+  return `Mileage — ${miles} ${miles === 1 ? 'mile' : 'miles'} @ ${rate}p`
+}
+
+// ── CEO report ───────────────────────────────────────────────────────────────
+
+export interface ReportLine extends Pick<
+  ExpenseLine,
+  'id' | 'claim_id' | 'date' | 'description' | 'category' | 'fund_id' | 'net' | 'vat' | 'gross' | 'is_mileage' | 'miles'
+> {}
+
+/**
+ * Every non-archived claim whose month falls in [from, to] (inclusive,
+ * 'YYYY-MM'), with its lines — the raw material for the on-request report.
+ */
+export async function fetchClaimsReport(
+  from: string,
+  to: string,
+): Promise<{ claims: ClaimWithSubmitter[]; lines: ReportLine[] }> {
+  const { data, error } = await supabase
+    .from('expense_claims')
+    .select('*')
+    .gte('period', from)
+    .lte('period', to)
+    .is('archived_at', null)
+    .order('period', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(error.message)
+  const claims = await attachSubmitters((data ?? []) as ExpenseClaim[])
+  if (claims.length === 0) return { claims, lines: [] }
+
+  const lines: ReportLine[] = []
+  const ids = claims.map((c) => c.id)
+  // PostgREST's URL length is the binding limit — chunk the id list.
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data: rows, error: lineError } = await supabase
+      .from('expense_lines')
+      .select('id, claim_id, date, description, category, fund_id, net, vat, gross, is_mileage, miles')
+      .in('claim_id', ids.slice(i, i + 100))
+      .order('date', { ascending: true })
+    if (lineError) throw new Error(lineError.message)
+    lines.push(...((rows ?? []) as ReportLine[]))
+  }
+  return { claims, lines }
 }
 
 /** Active users a Pulse admin/bookkeeper can raise a claim for. */

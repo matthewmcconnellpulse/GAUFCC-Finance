@@ -16,6 +16,7 @@ import {
   formatDayMonth,
   isPdfPath,
   signedReceiptUrl,
+  type ClaimWithSubmitter,
   type DeadlineInfo,
 } from './lib'
 
@@ -269,7 +270,21 @@ interface TimelineStep {
   state: 'done' | 'warn' | 'todo'
 }
 
-export function ClaimTimeline({ claim }: { claim: ExpenseClaim }) {
+/** A timestamp with the person who did it underneath, when we know them. */
+function stamp(at: string, who: { full_name: string } | null | undefined): ReactNode {
+  return (
+    <>
+      {formatDateTime(at)}
+      {who ? <span className="block text-ink">by {who.full_name}</span> : null}
+    </>
+  )
+}
+
+export function ClaimTimeline({
+  claim,
+}: {
+  claim: ExpenseClaim & Partial<Pick<ClaimWithSubmitter, 'approver' | 'returner'>>
+}) {
   const s = claim.status
   const steps: TimelineStep[] = [
     { key: 'created', label: 'Created', detail: formatDateTime(claim.created_at), state: 'done' },
@@ -280,11 +295,19 @@ export function ClaimTimeline({ claim }: { claim: ExpenseClaim }) {
       state: claim.submitted_at ? 'done' : 'todo',
     },
   ]
+  if (s === 'draft' && claim.returned_at) {
+    steps.push({
+      key: 'returned',
+      label: 'Returned for amendment',
+      detail: stamp(claim.returned_at, claim.returner),
+      state: 'warn',
+    })
+  }
   if (s === 'rejected') {
     steps.push({
       key: 'rejected',
       label: 'Rejected',
-      detail: claim.ceo_approved_at ? formatDateTime(claim.ceo_approved_at) : '—',
+      detail: claim.ceo_approved_at ? stamp(claim.ceo_approved_at, claim.approver) : '—',
       state: 'warn',
     })
   } else {
@@ -292,7 +315,8 @@ export function ClaimTimeline({ claim }: { claim: ExpenseClaim }) {
     steps.push({
       key: 'approved',
       label: 'Approved',
-      detail: approved && claim.ceo_approved_at ? formatDateTime(claim.ceo_approved_at) : 'awaiting the CEO',
+      detail:
+        approved && claim.ceo_approved_at ? stamp(claim.ceo_approved_at, claim.approver) : 'awaiting the CEO',
       state: approved ? 'done' : 'todo',
     })
     const pushed = s === 'pushed_to_xero' || s === 'paid'
