@@ -283,16 +283,58 @@ export function mileageAmount(miles: number, ratePence: number): number {
   return round2((miles * ratePence) / 100)
 }
 
-export function mileageDescription(miles: number, ratePence: number): string {
+/**
+ * The line description for a mileage claim, built from the journey log so the
+ * bill in Xero reads the way the log does: "Mileage — Manchester to London
+ * (return), 42 miles @ 45p". Where the journey has not been filled in yet it
+ * degrades to just the miles and rate.
+ */
+export function mileageDescription(
+  miles: number,
+  ratePence: number,
+  journey?: Pick<ExpenseLine, 'journey_from' | 'journey_to' | 'is_return_journey'>,
+): string {
   const rate = Number.isInteger(ratePence) ? String(ratePence) : ratePence.toFixed(2)
-  return `Mileage — ${miles} ${miles === 1 ? 'mile' : 'miles'} @ ${rate}p`
+  const from = journey?.journey_from?.trim()
+  const to = journey?.journey_to?.trim()
+  const leg = from && to ? `${from} to ${to}` : from || to || null
+  const route = leg ? `${leg}${journey?.is_return_journey ? ' (return)' : ''}, ` : ''
+  return `Mileage — ${route}${miles} ${miles === 1 ? 'mile' : 'miles'} @ ${rate}p`
+}
+
+/** A mileage line is only a valid HMRC record with the journey written down. */
+export function mileageLogGaps(
+  line: Pick<ExpenseLine, 'is_mileage' | 'miles' | 'journey_from' | 'journey_to' | 'journey_purpose'>,
+): string[] {
+  if (!line.is_mileage) return []
+  const gaps: string[] = []
+  if (!line.miles || line.miles <= 0) gaps.push('the miles')
+  if (!line.journey_from?.trim()) gaps.push('where you started')
+  if (!line.journey_to?.trim()) gaps.push('where you went')
+  if (!line.journey_purpose?.trim()) gaps.push('the reason for the journey')
+  return gaps
 }
 
 // ── CEO report ───────────────────────────────────────────────────────────────
 
 export interface ReportLine extends Pick<
   ExpenseLine,
-  'id' | 'claim_id' | 'date' | 'description' | 'category' | 'fund_id' | 'net' | 'vat' | 'gross' | 'is_mileage' | 'miles'
+  | 'id'
+  | 'claim_id'
+  | 'date'
+  | 'description'
+  | 'category'
+  | 'fund_id'
+  | 'net'
+  | 'vat'
+  | 'gross'
+  | 'is_mileage'
+  | 'miles'
+  | 'mileage_rate_pence'
+  | 'journey_from'
+  | 'journey_to'
+  | 'journey_purpose'
+  | 'is_return_journey'
 > {}
 
 /**
@@ -321,7 +363,9 @@ export async function fetchClaimsReport(
   for (let i = 0; i < ids.length; i += 100) {
     const { data: rows, error: lineError } = await supabase
       .from('expense_lines')
-      .select('id, claim_id, date, description, category, fund_id, net, vat, gross, is_mileage, miles')
+      .select(
+        'id, claim_id, date, description, category, fund_id, net, vat, gross, is_mileage, miles, mileage_rate_pence, journey_from, journey_to, journey_purpose, is_return_journey',
+      )
       .in('claim_id', ids.slice(i, i + 100))
       .order('date', { ascending: true })
     if (lineError) throw new Error(lineError.message)
@@ -454,6 +498,10 @@ export type NewLineValues = Pick<ExpenseLine, 'date' | 'description' | 'net' | '
       | 'is_mileage'
       | 'miles'
       | 'mileage_rate_pence'
+      | 'journey_from'
+      | 'journey_to'
+      | 'journey_purpose'
+      | 'is_return_journey'
     >
   >
 

@@ -291,6 +291,12 @@ export interface ExpenseLine {
   is_mileage: boolean
   miles: number | null
   mileage_rate_pence: number | null
+  /** The mileage log HMRC expects behind an AMAP claim. */
+  journey_from: string | null
+  journey_to: string | null
+  journey_purpose: string | null
+  /** Descriptive: `miles` is always the total claimed, there and back. */
+  is_return_journey: boolean
   created_at: string
   updated_at: string
 }
@@ -553,9 +559,14 @@ export interface BoardPack {
 export type CloseTaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done' | 'not_applicable'
 export type ClosePeriodStatus = 'in_progress' | 'complete' | 'reopened'
 
+/** A close runs monthly, or quarterly where the management accounts do. */
+export type ClosePeriodType = 'month' | 'quarter'
+
 export interface ClosePeriod {
   id: string
-  period: string // 'YYYY-MM'
+  /** 'YYYY-MM' for a month, 'YYYY-Qn' for a quarter. */
+  period: string
+  period_type: ClosePeriodType
   status: ClosePeriodStatus
   note: string | null
   share_token: string

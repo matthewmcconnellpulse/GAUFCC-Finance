@@ -47,6 +47,7 @@ import {
   fetchDuplicateWarnings,
   fetchMileageRatePence,
   fileSha256,
+  mileageLogGaps,
   formatDayMonth,
   insertLine,
   needsConfirmation,
@@ -169,6 +170,12 @@ export default function ClaimDetailPage() {
   )
   const missingAmounts = useMemo(() => lines.filter((l) => l.gross === 0).length, [lines])
   const missingDates = useMemo(() => lines.filter((l) => !l.date).length, [lines])
+  // A mileage claim without a journey log is not a record HMRC would accept,
+  // so it blocks submission the same way a missing amount does.
+  const incompleteMileage = useMemo(
+    () => lines.filter((l) => mileageLogGaps(l).length > 0).length,
+    [lines],
+  )
 
   // ── Mutation helpers (optimistic, with error surface) ─────────────────────
 
@@ -473,6 +480,10 @@ export default function ClaimDetailPage() {
     )
   if (missingDates > 0)
     submitBlockers.push(`${missingDates} ${missingDates === 1 ? 'line needs' : 'lines need'} a date`)
+  if (incompleteMileage > 0)
+    submitBlockers.push(
+      `${incompleteMileage} mileage ${incompleteMileage === 1 ? 'line needs' : 'lines need'} the journey filled in (from, to and why)`,
+    )
   if (unconfirmedCount > 0)
     submitBlockers.push(
       `${unconfirmedCount} AI-read ${unconfirmedCount === 1 ? 'line needs' : 'lines need'} your check`,

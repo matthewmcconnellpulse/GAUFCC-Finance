@@ -14,6 +14,7 @@ import {
   isLowConfidence,
   mileageAmount,
   mileageDescription,
+  mileageLogGaps,
   needsConfirmation,
   round2,
   type CategoryOption,
@@ -56,6 +57,9 @@ export function LineCard({
   const [descText, setDescText] = useState(line.description ?? '')
   const [milesText, setMilesText] = useState(line.miles != null && line.miles !== 0 ? String(line.miles) : '')
   const [rateText, setRateText] = useState(String(line.mileage_rate_pence ?? mileageRatePence))
+  const [fromText, setFromText] = useState(line.journey_from ?? '')
+  const [toText, setToText] = useState(line.journey_to ?? '')
+  const [purposeText, setPurposeText] = useState(line.journey_purpose ?? '')
 
   const editable = mode === 'full'
   const coding = mode === 'coding'
@@ -87,7 +91,7 @@ export function LineCard({
     setVatText('0')
     const patch: Partial<ExpenseLine> = { miles, mileage_rate_pence: rate, net: amount, vat: 0, gross: amount }
     if (!descText.trim() || /^Mileage — /.test(descText)) {
-      const d = mileageDescription(miles, rate)
+      const d = mileageDescription(miles, rate, line)
       setDescText(d)
       if (d !== line.description) patch.description = d
     }
@@ -99,6 +103,27 @@ export function LineCard({
     ) {
       onPatch(patch)
     }
+  }
+
+  /**
+   * Journey details double as the description: an auto-written one is kept in
+   * step with the log, but anything typed by hand is left alone.
+   */
+  const commitJourney = (patch: Partial<ExpenseLine>) => {
+    const next = { ...line, ...patch }
+    const full: Partial<ExpenseLine> = { ...patch }
+    if (next.is_mileage && (!descText.trim() || /^Mileage — /.test(descText))) {
+      const d = mileageDescription(
+        next.miles ?? 0,
+        next.mileage_rate_pence ?? mileageRatePence,
+        next,
+      )
+      if (d !== line.description) {
+        setDescText(d)
+        full.description = d
+      }
+    }
+    onPatch(full)
   }
 
   const toggleMileage = (on: boolean) => {
@@ -122,7 +147,7 @@ export function LineCard({
       gross: amount,
     }
     if (!descText.trim()) {
-      const d = mileageDescription(miles, rate)
+      const d = mileageDescription(miles, rate, line)
       setDescText(d)
       patch.description = d
     }
@@ -273,8 +298,86 @@ export function LineCard({
           </div>
 
           {line.is_mileage ? (
-            <div className="grid grid-cols-3 gap-3 sm:max-w-[440px]">
-              <Field label="Miles">
+            <div className="rounded-control border border-stone-200 bg-paper-2 p-3 space-y-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <span className="text-[10px] font-medium uppercase tracking-[.12em] text-stone-500">
+                  Journey
+                </span>
+                {amountsEditable ? (
+                  <label className="inline-flex items-center gap-2 text-[11px] text-stone-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={line.is_return_journey}
+                      onChange={(e) => commitJourney({ is_return_journey: e.target.checked })}
+                      className="accent-indigo"
+                    />
+                    Return journey
+                  </label>
+                ) : line.is_return_journey ? (
+                  <span className="text-[10.5px] text-stone-500">return journey</span>
+                ) : null}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Field label="From">
+                  {amountsEditable ? (
+                    <Input
+                      value={fromText}
+                      placeholder="e.g. Essex Hall, London"
+                      onChange={(e) => setFromText(e.target.value)}
+                      onBlur={() => {
+                        const v = fromText.trim()
+                        if (v !== (line.journey_from ?? '')) commitJourney({ journey_from: v || null })
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
+                      }}
+                      className="py-1.5 text-[12px]"
+                    />
+                  ) : (
+                    <span className="block text-[12px] text-ink py-1.5">{line.journey_from || '—'}</span>
+                  )}
+                </Field>
+                <Field label="To">
+                  {amountsEditable ? (
+                    <Input
+                      value={toText}
+                      placeholder="e.g. Manchester meeting house"
+                      onChange={(e) => setToText(e.target.value)}
+                      onBlur={() => {
+                        const v = toText.trim()
+                        if (v !== (line.journey_to ?? '')) commitJourney({ journey_to: v || null })
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur()
+                      }}
+                      className="py-1.5 text-[12px]"
+                    />
+                  ) : (
+                    <span className="block text-[12px] text-ink py-1.5">{line.journey_to || '—'}</span>
+                  )}
+                </Field>
+              </div>
+              <Field label="Reason for the journey">
+                {amountsEditable ? (
+                  <Input
+                    value={purposeText}
+                    placeholder="e.g. Trustee meeting"
+                    onChange={(e) => setPurposeText(e.target.value)}
+                    onBlur={() => {
+                      const v = purposeText.trim()
+                      if (v !== (line.journey_purpose ?? '')) commitJourney({ journey_purpose: v || null })
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                    }}
+                    className="py-1.5 text-[12px]"
+                  />
+                ) : (
+                  <span className="block text-[12px] text-ink py-1.5">{line.journey_purpose || '—'}</span>
+                )}
+              </Field>
+              <div className="grid grid-cols-3 gap-3 sm:max-w-[440px]">
+                <Field label="Miles">
                 {amountsEditable ? (
                   <Input
                     type="number"
@@ -320,11 +423,18 @@ export function LineCard({
                   </span>
                 )}
               </Field>
-              <Field label="Amount" hint={amountsEditable ? 'miles × rate, no VAT' : undefined}>
-                <span className="block font-mono text-[12.5px] font-medium text-ink py-1.5 text-right">
-                  {(amountsEditable ? gross : line.gross).toFixed(2)}
-                </span>
-              </Field>
+                <Field label="Amount" hint={amountsEditable ? 'miles × rate, no VAT' : undefined}>
+                  <span className="block font-mono text-[12.5px] font-medium text-ink py-1.5 text-right">
+                    {(amountsEditable ? gross : line.gross).toFixed(2)}
+                  </span>
+                </Field>
+              </div>
+              {amountsEditable && mileageLogGaps(line).length > 0 ? (
+                <p className="text-[10.5px] text-stone-500 leading-relaxed">
+                  A mileage claim needs a log behind it — still to fill in:{' '}
+                  {mileageLogGaps(line).join(', ')}.
+                </p>
+              ) : null}
             </div>
           ) : (
           <div className="grid grid-cols-3 gap-3 sm:max-w-[440px]">

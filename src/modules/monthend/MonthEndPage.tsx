@@ -24,9 +24,9 @@ import {
   StatusChip,
   cx,
 } from '@/components/ui'
-import { currentPeriod, formatDate, formatDateTime, formatPeriod } from '@/lib/format'
+import { formatDate, formatDateTime } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
-import type { CloseTask, CloseTaskStatus, Profile } from '@/types/db'
+import type { CloseTask, CloseTaskStatus, ClosePeriodType, Profile } from '@/types/db'
 import {
   PERIOD_STATUS_LABELS,
   TASK_STATUS_LABELS,
@@ -37,8 +37,11 @@ import {
   fetchCloseTasks,
   fetchCloseTeam,
   fetchClosePeriods,
+  formatClosePeriod,
   groupTasks,
   openClosePeriod,
+  previousMonth,
+  previousQuarter,
   progressOf,
   reopenMonth,
   shareUrl,
@@ -47,14 +50,6 @@ import {
 } from './lib'
 
 const STATUS_ORDER: CloseTaskStatus[] = ['todo', 'in_progress', 'blocked', 'done', 'not_applicable']
-
-/** The month before this one — the month you are normally closing. */
-function lastMonth(): string {
-  const d = new Date()
-  d.setDate(1)
-  d.setMonth(d.getMonth() - 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-}
 
 export default function MonthEndPage() {
   const { profile } = useAuth()
@@ -85,12 +80,13 @@ export default function MonthEndPage() {
   const canManage = isPulse
   const canView = isPulse || isCeo || isTrustee
 
-  const openMonth = async (value: string) => {
-    if (!/^\d{4}-\d{2}$/.test(value)) return
+  const openMonth = async (value: string, type: ClosePeriodType = 'month') => {
+    const valid = type === 'quarter' ? /^\d{4}-Q[1-4]$/.test(value) : /^\d{4}-\d{2}$/.test(value)
+    if (!valid) return
     setBusy(true)
     setActionError(null)
     try {
-      await openClosePeriod(value)
+      await openClosePeriod(value, type)
       await periods.refetch()
       setParams({ period: value }, { replace: true })
     } catch (e) {
@@ -140,7 +136,7 @@ export default function MonthEndPage() {
       <div className="no-print">
         <PageHeader
           title="Month end close"
-          subtitle="Work the checklist, assign each line, sign it off — and share the progress"
+          subtitle="Monthly or quarterly — work the checklist, assign each line, sign it off, and share the progress"
           actions={
             <>
               {periods.data && periods.data.length > 0 ? (
@@ -152,7 +148,7 @@ export default function MonthEndPage() {
                 >
                   {periods.data.map((p) => (
                     <option key={p.id} value={p.period}>
-                      {formatPeriod(p.period)} · {PERIOD_STATUS_LABELS[p.status]}
+                      {formatClosePeriod(p.period)} · {PERIOD_STATUS_LABELS[p.status]}
                     </option>
                   ))}
                 </Select>
@@ -182,17 +178,26 @@ export default function MonthEndPage() {
       ) : !period ? (
         <Card>
           <EmptyState
-            title="No month end started yet"
+            title="No close started yet"
             hint={
               canManage
-                ? `Open ${formatPeriod(lastMonth())} to lay out the checklist — every line comes with a link to the work and a sign-off.`
-                : 'Pulse will start the checklist for the month.'
+                ? `Open ${formatClosePeriod(previousMonth())} to lay out the checklist — every line comes with a link to the work and a sign-off. Quarterly closes carry three extra lines for the board reporting.`
+                : 'Pulse will start the checklist for the period.'
             }
             action={
               canManage ? (
-                <Button variant="primary" disabled={busy} onClick={() => void openMonth(lastMonth())}>
-                  {busy ? 'Opening…' : `Open ${formatPeriod(lastMonth())}`}
-                </Button>
+                <span className="inline-flex flex-wrap gap-2 justify-center">
+                  <Button variant="primary" disabled={busy} onClick={() => void openMonth(previousMonth())}>
+                    {busy ? 'Opening…' : `Open ${formatClosePeriod(previousMonth())}`}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => void openMonth(previousQuarter(), 'quarter')}
+                  >
+                    Open {formatClosePeriod(previousQuarter())}
+                  </Button>
+                </span>
               ) : undefined
             }
           />
@@ -200,7 +205,8 @@ export default function MonthEndPage() {
       ) : (
         <div id="close-board" className="space-y-4">
           <ProgressCard
-            periodLabel={formatPeriod(period.period)}
+            periodLabel={formatClosePeriod(period.period)}
+            cadence={period.period_type}
             statusLabel={PERIOD_STATUS_LABELS[period.status]}
             progress={progress}
             openedAt={period.opened_at}
@@ -337,27 +343,87 @@ export default function MonthEndPage() {
 
 // ── Pieces ───────────────────────────────────────────────────────────────────
 
-function OpenMonthButton({ busy, onOpen }: { busy: boolean; onOpen: (period: string) => void }) {
+/**
+ * Opening a close: a month, or a quarter where the management accounts run
+ * quarterly. A quarter brings three extra checklist lines (board pack,
+ * quarter-on-quarter variance, reserves against policy).
+ */
+function OpenMonthButton({
+  busy,
+  onOpen,
+}: {
+  busy: boolean
+  onOpen: (period: string, type: ClosePeriodType) => void
+}) {
   const [open, setOpen] = useState(false)
-  const [value, setValue] = useState(lastMonth())
+  const [cadence, setCadence] = useState<ClosePeriodType>('month')
+  const [month, setMonth] = useState(previousMonth())
+  const [quarter, setQuarter] = useState(previousQuarter())
+
   if (!open) {
     return (
       <Button variant="primary" onClick={() => setOpen(true)}>
-        Open a month…
+        Open a close…
       </Button>
     )
   }
+
+  // Four quarters back, newest first — enough to catch up without a date picker.
+  const quarterOptions: string[] = []
+  {
+    const now = new Date()
+    let q = Math.floor(now.getMonth() / 3)
+    let year = now.getFullYear()
+    for (let i = 0; i < 5; i += 1) {
+      q -= 1
+      if (q < 0) {
+        q = 3
+        year -= 1
+      }
+      quarterOptions.push(`${year}-Q${q + 1}`)
+    }
+  }
+
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <input
-        type="month"
-        value={value}
-        max={currentPeriod()}
-        onChange={(e) => setValue(e.target.value)}
-        className="input-base !w-auto py-1.5 text-[12px]"
-        aria-label="Month to open"
-      />
-      <Button size="sm" variant="primary" disabled={busy} onClick={() => onOpen(value)}>
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <Select
+        value={cadence}
+        onChange={(e) => setCadence(e.target.value as ClosePeriodType)}
+        className="!w-auto py-1.5 text-[12px]"
+        aria-label="Monthly or quarterly close"
+      >
+        <option value="month">Monthly</option>
+        <option value="quarter">Quarterly</option>
+      </Select>
+      {cadence === 'month' ? (
+        <input
+          type="month"
+          value={month}
+          max={previousMonth(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1))}
+          onChange={(e) => setMonth(e.target.value)}
+          className="input-base !w-auto py-1.5 text-[12px]"
+          aria-label="Month to open"
+        />
+      ) : (
+        <Select
+          value={quarter}
+          onChange={(e) => setQuarter(e.target.value)}
+          className="!w-auto py-1.5 text-[12px]"
+          aria-label="Quarter to open"
+        >
+          {quarterOptions.map((q) => (
+            <option key={q} value={q}>
+              {formatClosePeriod(q)}
+            </option>
+          ))}
+        </Select>
+      )}
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={busy}
+        onClick={() => onOpen(cadence === 'month' ? month : quarter, cadence)}
+      >
         {busy ? 'Opening…' : 'Open'}
       </Button>
       <Button size="sm" variant="quiet" onClick={() => setOpen(false)}>
@@ -369,6 +435,7 @@ function OpenMonthButton({ busy, onOpen }: { busy: boolean; onOpen: (period: str
 
 function ProgressCard({
   periodLabel,
+  cadence,
   statusLabel,
   progress,
   openedAt,
@@ -381,6 +448,7 @@ function ProgressCard({
   onReopen,
 }: {
   periodLabel: string
+  cadence: ClosePeriodType
   statusLabel: string
   progress: ReturnType<typeof progressOf>
   openedAt: string
@@ -403,6 +471,7 @@ function ProgressCard({
           <div className="flex items-center gap-2">
             <h2 className="font-display text-[20px] text-ink leading-none">{periodLabel}</h2>
             <StatusChip tone={completedAt ? 'good' : 'indigo'}>{statusLabel}</StatusChip>
+            {cadence === 'quarter' ? <StatusChip tone="neutral">Quarterly</StatusChip> : null}
           </div>
           <p className="text-[11px] text-stone-500 mt-1.5">
             Started {formatDate(openedAt)}

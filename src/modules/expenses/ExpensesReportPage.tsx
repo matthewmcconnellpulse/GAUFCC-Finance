@@ -115,6 +115,12 @@ export default function ExpensesReportPage() {
       drafts: claims.filter((c) => c.status === 'draft').length,
       rejected: claims.filter((c) => c.status === 'rejected').length,
       mileage: spendLines.filter((l) => l.is_mileage).reduce((s, l) => s + l.gross, 0),
+      mileageLines: spendLines
+        .filter((l) => l.is_mileage)
+        .sort((a, b) => a.date.localeCompare(b.date)),
+      mileageMiles: spendLines
+        .filter((l) => l.is_mileage)
+        .reduce((s, l) => s + (l.miles ?? 0), 0),
       byFund: by(spendLines, (l) => l.fund_id),
       byCategory: by(spendLines, (l) => l.category),
       byClaimant: [...byClaimant.values()].sort((a, b) => b.total - a.total),
@@ -174,6 +180,32 @@ export default function ExpensesReportPage() {
     )
   }
 
+  const downloadMileage = () => {
+    const claimById = new Map(summary.claims.map((c) => [c.id, c]))
+    const rows = summary.mileageLines.map((l) => {
+      const c = claimById.get(l.claim_id)
+      return [
+        l.date,
+        c?.submitter?.full_name ?? '',
+        l.journey_from ?? '',
+        l.journey_to ?? '',
+        l.is_return_journey ? 'Yes' : 'No',
+        l.journey_purpose ?? '',
+        l.miles ?? 0,
+        l.mileage_rate_pence ?? '',
+        l.gross,
+        c ? CLAIM_STATUS_LABELS[c.status] : '',
+      ]
+    })
+    downloadTextFile(
+      `mileage-log-${range.from}-to-${range.to}.csv`,
+      buildCsv(
+        ['Date', 'Claimant', 'From', 'To', 'Return', 'Reason', 'Miles', 'Rate (p)', 'Amount', 'Claim status'],
+        rows,
+      ),
+    )
+  }
+
   if (!isPulse && !isCeo) {
     return (
       <Card>
@@ -206,6 +238,13 @@ export default function ExpensesReportPage() {
               </Button>
               <Button variant="ghost" onClick={downloadLines} disabled={summary.lines.length === 0}>
                 Download lines CSV
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={downloadMileage}
+                disabled={summary.mileageLines.length === 0}
+              >
+                Download mileage log
               </Button>
               <Button variant="primary" onClick={() => window.print()} disabled={summary.claims.length === 0}>
                 Print
@@ -329,6 +368,73 @@ export default function ExpensesReportPage() {
                 </table>
               </div>
             </Card>
+
+            {/* Mileage log — the HMRC record behind the AMAP claims */}
+            {summary.mileageLines.length > 0 ? (
+              <Card className="overflow-hidden">
+                <div className="px-5 pt-4 flex flex-wrap items-baseline justify-between gap-2">
+                  <SectionLabel>Mileage log · {summary.mileageLines.length}</SectionLabel>
+                  <span className="text-[10.5px] text-stone-500">
+                    {summary.mileageMiles.toLocaleString('en-GB', { maximumFractionDigits: 1 })} miles ·{' '}
+                    {formatMoney(summary.mileage)}
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr>
+                        <th className="th-register">Date</th>
+                        <th className="th-register">Claimant</th>
+                        <th className="th-register">Journey</th>
+                        <th className="th-register">Reason</th>
+                        <th className="th-register text-right">Miles</th>
+                        <th className="th-register text-right">Rate</th>
+                        <th className="th-register text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summary.mileageLines.map((l) => {
+                        const claim = summary.claims.find((c) => c.id === l.claim_id)
+                        return (
+                          <tr
+                            key={l.id}
+                            className="cursor-pointer hover:bg-paper-2 transition-colors"
+                            onClick={() => navigate(`/expenses/${l.claim_id}`)}
+                          >
+                            <td className="td-register font-mono text-[11.5px] text-stone-700 whitespace-nowrap">
+                              {formatDate(l.date)}
+                            </td>
+                            <td className="td-register text-[12px] text-ink whitespace-nowrap">
+                              {claim?.submitter?.full_name ?? '—'}
+                            </td>
+                            <td className="td-register text-[12px] text-stone-700">
+                              {l.journey_from || l.journey_to
+                                ? `${l.journey_from ?? '—'} → ${l.journey_to ?? '—'}`
+                                : '—'}
+                              {l.is_return_journey ? (
+                                <span className="text-[10.5px] text-stone-500"> (return)</span>
+                              ) : null}
+                            </td>
+                            <td className="td-register text-[12px] text-stone-700">
+                              {l.journey_purpose || '—'}
+                            </td>
+                            <td className="td-register text-right font-mono text-[12px] whitespace-nowrap">
+                              {(l.miles ?? 0).toFixed(1)}
+                            </td>
+                            <td className="td-register text-right font-mono text-[11.5px] text-stone-500 whitespace-nowrap">
+                              {l.mileage_rate_pence != null ? `${l.mileage_rate_pence}p` : '—'}
+                            </td>
+                            <td className="td-register text-right font-mono text-[12.5px] text-ink whitespace-nowrap">
+                              {formatMoney(l.gross)}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            ) : null}
 
             {/* Breakdowns — real spend only */}
             <div className="grid gap-4 lg:grid-cols-3">

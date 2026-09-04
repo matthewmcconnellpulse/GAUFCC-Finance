@@ -7,11 +7,12 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Card, EmptyState, LoadingRows } from '@/components/ui'
-import { formatDate, formatDateTime, formatPeriod } from '@/lib/format'
+import { formatDate, formatDateTime } from '@/lib/format'
 import {
   PERIOD_STATUS_LABELS,
   TASK_STATUS_LABELS,
   fetchSharedProgress,
+  formatClosePeriod,
   isSettled,
   type SharedProgress,
   type SharedTask,
@@ -53,7 +54,7 @@ export default function CloseSharePage() {
       <div className="max-w-3xl mx-auto">
         <div className="mb-6">
           <div className="font-display text-[20px] text-indigo leading-none">GAUFCC Finance</div>
-          <div className="text-[11px] text-stone-500 mt-1">Month end progress · prepared by Pulse</div>
+          <div className="text-[11px] text-stone-500 mt-1">Close progress · prepared by Pulse</div>
         </div>
 
         {state === 'loading' ? (
@@ -80,9 +81,10 @@ export default function CloseSharePage() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <h1 className="font-display text-[24px] text-ink leading-tight">
-                    {formatPeriod(data.period)}
+                    {formatClosePeriod(data.period)}
                   </h1>
                   <p className="text-[11.5px] text-stone-500 mt-1">
+                    {data.period_type === 'quarter' ? 'Quarterly close · ' : ''}
                     {PERIOD_STATUS_LABELS[data.status]} · started {formatDate(data.opened_at)}
                     {data.completed_at ? ` · closed ${formatDate(data.completed_at)}` : ''}
                   </p>

@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase'
 import type {
   ClosePeriod,
   ClosePeriodStatus,
+  ClosePeriodType,
   CloseTask,
   CloseTaskStatus,
   Profile,
@@ -36,6 +37,41 @@ export const PERIOD_STATUS_LABELS: Record<ClosePeriodStatus, string> = {
   in_progress: 'In progress',
   complete: 'Closed',
   reopened: 'Reopened',
+}
+
+// ── Period labels ────────────────────────────────────────────────────────────
+
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+]
+
+/** '2026-09' → 'September 2026'; '2026-Q3' → 'Q3 2026 (Jul–Sep)'. */
+export function formatClosePeriod(period: string): string {
+  const quarter = /^(\d{4})-Q([1-4])$/.exec(period)
+  if (quarter) {
+    const q = Number(quarter[2])
+    const first = MONTHS[(q - 1) * 3].slice(0, 3)
+    const last = MONTHS[(q - 1) * 3 + 2].slice(0, 3)
+    return `Q${q} ${quarter[1]} (${first}–${last})`
+  }
+  const month = /^(\d{4})-(\d{2})$/.exec(period)
+  if (month) return `${MONTHS[Number(month[2]) - 1]} ${month[1]}`
+  return period
+}
+
+/** The month just gone — the one you would normally be closing. */
+export function previousMonth(today = new Date()): string {
+  const d = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** The quarter just gone. */
+export function previousQuarter(today = new Date()): string {
+  const q = Math.floor(today.getMonth() / 3)
+  const year = q === 0 ? today.getFullYear() - 1 : today.getFullYear()
+  const quarter = q === 0 ? 4 : q
+  return `${year}-Q${quarter}`
 }
 
 /** Statuses that count as finished when measuring progress. */
@@ -115,8 +151,14 @@ export async function fetchCloseTeam(): Promise<Array<Pick<Profile, 'id' | 'full
  * active templates server-side, so two people opening the same month race to
  * the same row rather than duplicating it.
  */
-export async function openClosePeriod(period: string): Promise<string> {
-  const { data, error } = await supabase.rpc('open_close_period', { p_period: period })
+export async function openClosePeriod(
+  period: string,
+  periodType: ClosePeriodType = 'month',
+): Promise<string> {
+  const { data, error } = await supabase.rpc('open_close_period', {
+    p_period: period,
+    p_period_type: periodType,
+  })
   if (error) throw new Error(error.message)
   return data as string
 }
@@ -206,6 +248,7 @@ export interface SharedTask {
 
 export interface SharedProgress {
   period: string
+  period_type: ClosePeriodType
   status: ClosePeriodStatus
   note: string | null
   opened_at: string
