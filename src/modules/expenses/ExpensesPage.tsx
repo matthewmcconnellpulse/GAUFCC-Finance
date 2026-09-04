@@ -35,8 +35,10 @@ import {
   fetchActiveProfiles,
   fetchClaims,
   periodOptions,
+  previewExpenseReminders,
   sendExpenseReminders,
   type ClaimWithSubmitter,
+  type ReminderPreview,
 } from './lib'
 
 export default function ExpensesPage() {
@@ -307,15 +309,34 @@ function ClaimRow({ claim, onOpen }: { claim: ClaimWithSubmitter; onOpen: () => 
 function RemindClaimants() {
   const [open, setOpen] = useState(false)
   const [period, setPeriod] = useState(currentPeriod())
-  const [sending, setSending] = useState(false)
+  const [preview, setPreview] = useState<ReminderPreview | null>(null)
+  const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const send = async () => {
-    if (sending || !/^\d{4}-\d{2}$/.test(period)) return
-    setSending(true)
+  const reset = () => {
+    setPreview(null)
     setError(null)
+  }
+
+  const check = async () => {
+    if (busy || !/^\d{4}-\d{2}$/.test(period)) return
+    setBusy(true)
+    reset()
     setResult(null)
+    try {
+      setPreview(await previewExpenseReminders(period))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The recipients could not be checked')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const send = async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
     try {
       const { sent, skipped } = await sendExpenseReminders(period)
       setResult(
@@ -324,10 +345,11 @@ function RemindClaimants() {
           : `Reminder sent to ${sent} ${sent === 1 ? 'person' : 'people'}${skipped > 0 ? ` · ${skipped} already submitted` : ''}.`,
       )
       setOpen(false)
+      setPreview(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The reminders could not be sent')
     } finally {
-      setSending(false)
+      setBusy(false)
     }
   }
 
@@ -338,25 +360,90 @@ function RemindClaimants() {
           <input
             type="month"
             value={period}
-            disabled={sending}
-            onChange={(e) => setPeriod(e.target.value)}
+            disabled={busy}
+            onChange={(e) => {
+              setPeriod(e.target.value)
+              reset()
+            }}
             className="input-base !w-auto py-1.5 text-[12px]"
             aria-label="Month to remind about"
           />
-          <Button size="sm" variant="primary" onClick={() => void send()} disabled={sending}>
-            {sending ? 'Sending…' : 'Email everyone unsubmitted'}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={sending}>
+          {preview ? (
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => void send()}
+              disabled={busy || preview.would_send === 0 || !preview.email_ready}
+            >
+              {busy
+                ? 'Sending…'
+                : `Send to ${preview.would_send} ${preview.would_send === 1 ? 'person' : 'people'}`}
+            </Button>
+          ) : (
+            <Button size="sm" variant="primary" onClick={() => void check()} disabled={busy}>
+              {busy ? 'Checking…' : 'Check who gets it'}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setOpen(false)
+              reset()
+            }}
+            disabled={busy}
+          >
             Cancel
           </Button>
         </span>
       ) : (
-        <Button variant="ghost" onClick={() => { setResult(null); setOpen(true) }}>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setResult(null)
+            setOpen(true)
+          }}
+        >
           Remind claimants…
         </Button>
       )}
+
+      {/* Nothing is sent until the list — and the email setup — has been seen. */}
+      {preview ? (
+        <div className="rounded-control border border-stone-200 bg-white px-3 py-2.5 max-w-[340px] text-left shadow-sm">
+          <p
+            className={`text-[11px] leading-relaxed ${preview.email_ready ? 'text-stone-600' : 'text-danger-ink'}`}
+          >
+            {preview.email_detail}
+          </p>
+          {preview.would_send === 0 ? (
+            <p className="text-[11.5px] text-stone-600 mt-1.5">
+              Nobody to remind — everyone has submitted for this month.
+            </p>
+          ) : (
+            <>
+              <p className="text-[11.5px] text-ink mt-1.5">
+                {preview.would_send} {preview.would_send === 1 ? 'person' : 'people'} would be emailed
+                {preview.skipped > 0 ? `, ${preview.skipped} skipped as already submitted` : ''}:
+              </p>
+              <ul className="text-[11px] text-stone-600 mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+                {preview.recipients.map((r) => (
+                  <li key={r.email}>
+                    {r.name}
+                    {r.has_draft ? (
+                      <span className="text-stone-500"> — has a draft to finish</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      ) : null}
       {result ? <span className="text-[10.5px] text-stone-500">{result}</span> : null}
-      {error ? <span className="text-[10.5px] text-danger-ink max-w-[300px] text-right">{error}</span> : null}
+      {error ? (
+        <span className="text-[10.5px] text-danger-ink max-w-[300px] text-right">{error}</span>
+      ) : null}
     </span>
   )
 }

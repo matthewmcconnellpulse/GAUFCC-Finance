@@ -411,6 +411,24 @@ export async function sendExpenseReminders(period: string): Promise<{ sent: numb
   return invokeFunction<{ sent: number; skipped: number }>('expense-reminders', { period })
 }
 
+export interface ReminderPreview {
+  period: string
+  would_send: number
+  skipped: number
+  /** Whether Resend actually accepts the key and the sending domain is verified. */
+  email_ready: boolean
+  email_detail: string
+  recipients: Array<{ name: string; email: string; has_draft: boolean }>
+}
+
+/**
+ * Who would be emailed, and whether email is genuinely configured — checked
+ * against Resend rather than just "a key is present". Sends nothing.
+ */
+export async function previewExpenseReminders(period: string): Promise<ReminderPreview> {
+  return invokeFunction<ReminderPreview>('expense-reminders', { period, dry_run: true })
+}
+
 export async function updateClaim(id: string, patch: Partial<ExpenseClaim>): Promise<void> {
   const { error } = await supabase.from('expense_claims').update(patch).eq('id', id)
   if (error) throw new Error(error.message)

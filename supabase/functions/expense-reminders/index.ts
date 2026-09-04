@@ -13,8 +13,12 @@
  * built-in mailer. A missing key fails with a clear message instead of
  * pretending to send.
  *
- * Body { period? } ('YYYY-MM', defaults to the current month).
- * Returns { ok: true, sent, skipped }.
+ * Body { period?, dry_run? } ('YYYY-MM', defaults to the current month).
+ * With dry_run the recipients are worked out and the Resend key is checked
+ * against Resend itself (a read-only /domains call), but nothing is sent —
+ * so the setup can be proved, and the list seen, before anyone is emailed.
+ * Returns { ok: true, sent, skipped } or, for a dry run,
+ * { ok: true, dry_run: true, would_send, skipped, recipients, email_ready }.
  */
 
 import { handleOptions, json, errorResponse } from '../_shared/http.ts'
@@ -72,7 +76,10 @@ Deno.serve(async (req) => {
     )
   }
 
-  const body = (await req.json().catch(() => null)) as { period?: unknown } | null
+  const body = (await req.json().catch(() => null)) as
+    | { period?: unknown; dry_run?: unknown }
+    | null
+  const dryRun = body?.dry_run === true
   const period =
     typeof body?.period === 'string' && /^\d{4}-\d{2}$/.test(body.period)
       ? body.period
@@ -110,6 +117,59 @@ Deno.serve(async (req) => {
   )
   const recipients = candidates.filter((p) => periodStatus.get(p.id as string) !== 'submitted')
   const skipped = candidates.length - recipients.length
+
+  if (dryRun) {
+    // Prove the key is actually accepted by Resend, and that the sending
+    // domain is verified — a present-but-wrong key would otherwise only
+    // surface when someone pressed send for real.
+    let emailReady = false
+    let emailDetail = ''
+    try {
+      const res = await fetch('https://api.resend.com/domains', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      })
+      if (!res.ok) {
+        emailDetail =
+          res.status === 401 || res.status === 403
+            ? 'Resend rejected the API key — check RESEND_API_KEY in Edge Functions → Secrets.'
+            : `Resend returned ${res.status}.`
+      } else {
+        const payload = (await res.json().catch(() => null)) as
+          | { data?: Array<{ name?: string; status?: string }> }
+          | null
+        const domains = payload?.data ?? []
+        const sending = FROM.match(/@([^>\s]+)/)?.[1] ?? ''
+        const match = domains.find((d) => d.name === sending)
+        if (!match) {
+          emailDetail = `The key works, but ${sending} is not set up in this Resend account${
+            domains.length > 0 ? ` (it has: ${domains.map((d) => d.name).join(', ')})` : ''
+          }.`
+        } else if (match.status !== 'verified') {
+          emailDetail = `${sending} is in Resend but its status is "${match.status}" — it must be verified before mail will send.`
+        } else {
+          emailReady = true
+          emailDetail = `Ready — the key works and ${sending} is verified.`
+        }
+      }
+    } catch (e) {
+      emailDetail = `Resend could not be reached: ${e instanceof Error ? e.message : 'unknown error'}`
+    }
+
+    return json({
+      ok: true,
+      dry_run: true,
+      period,
+      would_send: recipients.length,
+      skipped,
+      email_ready: emailReady,
+      email_detail: emailDetail,
+      recipients: recipients.map((p) => ({
+        name: p.full_name,
+        email: p.email,
+        has_draft: periodStatus.get(p.id as string) === 'draft',
+      })),
+    })
+  }
 
   if (recipients.length === 0) {
     return json({ ok: true, sent: 0, skipped })
