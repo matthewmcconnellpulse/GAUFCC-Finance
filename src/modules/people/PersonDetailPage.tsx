@@ -5,7 +5,7 @@
  * audited bank-details reveal.
  */
 import { useMemo, useState, type ReactNode } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { usePermissions } from '@/auth/AuthProvider'
 import {
   Button,
@@ -20,14 +20,19 @@ import {
   Skeleton,
 } from '@/components/ui'
 import { formatDate, formatDateTime } from '@/lib/format'
+import { useAuth } from '@/auth/AuthProvider'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import type { OnboardingStatus, OnboardingSubmission, Person } from '@/types/db'
 import { OnboardingStatusChip, PersonTypeChip } from './components'
 import {
   createOrLinkPersonLogin,
+  deletePerson,
   docsFromSubmissions,
   fetchPerson,
   fetchSubmissions,
+  isLeaver,
+  markLeaver,
+  restoreLeaver,
   revealBankDetails,
   setOnboardingStatus,
   signedDocUrl,
@@ -375,6 +380,11 @@ export default function PersonDetailPage() {
           <span className="inline-flex flex-wrap items-center gap-2">
             <PersonTypeChip type={p.type} />
             <OnboardingStatusChip status={p.onboarding_status} />
+            {isLeaver(p) ? (
+              <span className="text-[11px] text-stone-500">
+                left{p.end_date ? ` ${formatDate(p.end_date)}` : ''}
+              </span>
+            ) : null}
             {p.email ? <span>{p.email}</span> : null}
           </span>
         }
@@ -464,9 +474,156 @@ export default function PersonDetailPage() {
           ) : (
             <DocumentsCard submissions={submissions.data ?? []} />
           )}
+          {isAdmin || isPayroll ? (
+            <LeaverCard person={p} canDelete={isAdmin} onChanged={person.refetch} />
+          ) : null}
         </div>
       </div>
     </div>
+  )
+}
+
+// ── Leaver (payroll + admin) ─────────────────────────────────────────────────
+
+/**
+ * When someone leaves: record the last working day and file the record away.
+ * That is the normal path — nothing is destroyed and it can be undone, which
+ * matters because payroll records must be retained (six years for PAYE).
+ * Permanent deletion sits behind a second confirmation, is admin-only, and
+ * takes the uploaded documents with it.
+ */
+function LeaverCard({
+  person,
+  canDelete,
+  onChanged,
+}: {
+  person: Person
+  canDelete: boolean
+  onChanged: () => void
+}) {
+  const navigate = useNavigate()
+  const { profile } = useAuth()
+  const leaver = isLeaver(person)
+  const [open, setOpen] = useState(false)
+  const [endDate, setEndDate] = useState(person.end_date ?? new Date().toISOString().slice(0, 10))
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await work()
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'That did not work')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = () => {
+    const name = `${person.first_name} ${person.last_name}`.trim()
+    if (
+      !window.confirm(
+        `Permanently delete ${name}? Their record and every document they uploaded will be destroyed. This cannot be undone — marking them as a leaver keeps the record instead.`,
+      )
+    ) {
+      return
+    }
+    void (async () => {
+      setBusy(true)
+      setError(null)
+      try {
+        await deletePerson(person.id)
+        navigate('/people')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'The record could not be deleted')
+        setBusy(false)
+      }
+    })()
+  }
+
+  return (
+    <CardSection title={leaver ? 'Leaver' : 'When they leave'}>
+      {leaver ? (
+        <>
+          <p className="text-[12px] text-stone-600 leading-relaxed">
+            Marked as a leaver{person.end_date ? `, last day ${formatDate(person.end_date)}` : ''}
+            {person.archived_at ? ` on ${formatDate(person.archived_at)}` : ''}. The record is out of
+            the working list but nothing has been deleted.
+          </p>
+          {person.leaver_note ? (
+            <p className="text-[11.5px] text-stone-500 mt-2 leading-relaxed">{person.leaver_note}</p>
+          ) : null}
+          <div className="flex flex-wrap gap-2 mt-3">
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(() => restoreLeaver(person.id))}>
+              {busy ? 'Working…' : 'They are back — restore'}
+            </Button>
+            {canDelete ? (
+              <Button size="sm" variant="quiet" disabled={busy} onClick={remove}>
+                Delete permanently
+              </Button>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-[12px] text-stone-600 leading-relaxed">
+            Mark them as a leaver to take the record out of the working list. Everything is kept and
+            it can be undone.
+          </p>
+          {open ? (
+            <div className="mt-3 space-y-2.5">
+              <Field label="Last working day">
+                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              </Field>
+              <Field label="Note" hint="Optional — why they left, anything payroll should know.">
+                <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. moved away" />
+              </Field>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={busy || !endDate}
+                  onClick={() =>
+                    void run(async () => {
+                      if (!profile) throw new Error('Sign in again to record this')
+                      await markLeaver(person.id, profile.id, endDate, note)
+                      setOpen(false)
+                    })
+                  }
+                >
+                  {busy ? 'Saving…' : 'Mark as leaver'}
+                </Button>
+                <Button size="sm" variant="quiet" disabled={busy} onClick={() => setOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2 mt-3">
+              <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+                Mark as leaver…
+              </Button>
+              {canDelete ? (
+                <Button size="sm" variant="quiet" disabled={busy} onClick={remove}>
+                  Delete permanently
+                </Button>
+              ) : null}
+            </div>
+          )}
+        </>
+      )}
+      {error ? <p className="text-[11px] text-danger-ink mt-2 leading-relaxed">{error}</p> : null}
+      {canDelete ? (
+        <p className="text-[10.5px] text-stone-500 mt-3 leading-relaxed">
+          Deleting is for records that should not exist — duplicates and test rows. Payroll records
+          are normally retained for six years, so mark leavers instead.
+        </p>
+      ) : null}
+    </CardSection>
   )
 }
 

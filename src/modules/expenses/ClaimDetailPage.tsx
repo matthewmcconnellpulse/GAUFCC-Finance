@@ -44,7 +44,9 @@ import {
   fetchExpenseCategories,
   fetchFundOptions,
   fetchLines,
+  fetchDuplicateWarnings,
   fetchMileageRatePence,
+  fileSha256,
   formatDayMonth,
   insertLine,
   needsConfirmation,
@@ -61,6 +63,7 @@ import {
   updateLine,
   uploadReceipt,
   type ClaimWithSubmitter,
+  type DuplicateWarning,
   type StoredExtraction,
 } from './lib'
 
@@ -83,6 +86,32 @@ export default function ClaimDetailPage() {
   const [lines, setLines] = useState<ExpenseLine[]>([])
   useEffect(() => setClaim(claimQ.data ?? null), [claimQ.data])
   useEffect(() => setLines(linesQ.data ?? []), [linesQ.data])
+
+  // Duplicate receipt warnings, re-checked whenever the lines' fingerprints
+  // change (a new upload, an edited date or amount). Advisory only: a failure
+  // here must never stop someone claiming, so it degrades to no warnings.
+  const [duplicates, setDuplicates] = useState<Map<string, DuplicateWarning[]>>(new Map())
+  const lineFingerprint = lines
+    .map((l) => `${l.id}:${l.receipt_sha256 ?? ''}:${l.date}:${l.gross}`)
+    .join('|')
+  useEffect(() => {
+    if (!id || lines.length === 0) {
+      setDuplicates(new Map())
+      return
+    }
+    let cancelled = false
+    void fetchDuplicateWarnings(id)
+      .then((m) => {
+        if (!cancelled) setDuplicates(m)
+      })
+      .catch(() => {
+        if (!cancelled) setDuplicates(new Map())
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, lineFingerprint])
 
   const [actionError, setActionError] = useState<string | null>(null)
   const [jobs, setJobs] = useState<UploadJob[]>([])
@@ -216,6 +245,9 @@ export default function ClaimDetailPage() {
         setJobs((js) => js.map((j) => (j.id === jobId ? { ...j, ...patch } : j)))
       try {
         const path = receiptPath(claim.submitter_id, claim.id, file.name)
+        // Fingerprint before upload so the same photo is recognised later,
+        // whoever submits it.
+        const sha256 = await fileSha256(file)
         await uploadReceipt(path, file)
         setJob({ status: 'reading' })
         let line: ExpenseLine
@@ -224,6 +256,7 @@ export default function ClaimDetailPage() {
           line = await insertLine(claim.id, {
             ...prefillFromExtraction(extraction, confidence, file.name, categories),
             receipt_storage_path: path,
+            receipt_sha256: sha256,
           })
           setJob({ status: 'done' })
         } catch {
@@ -235,6 +268,7 @@ export default function ClaimDetailPage() {
             vat: 0,
             gross: 0,
             receipt_storage_path: path,
+            receipt_sha256: sha256,
           })
           setJob({ status: 'error', error: 'could not read it — fill the line in below' })
         }
@@ -607,6 +641,7 @@ export default function ClaimDetailPage() {
                     funds={funds}
                     mode={lineMode}
                     mileageRatePence={mileageRateQ.data ?? DEFAULT_MILEAGE_RATE_PENCE}
+                    duplicates={duplicates.get(line.id)}
                     onPatch={(patch) => void patchLine(line.id, patch)}
                     onDelete={canEditAll ? () => void removeLine(line.id) : undefined}
                     onConfirm={canEditAll ? () => confirmLine(line) : undefined}

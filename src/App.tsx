@@ -20,6 +20,8 @@ const ExpensesPage = lazy(() => import('@/modules/expenses/ExpensesPage'))
 const ClaimDetailPage = lazy(() => import('@/modules/expenses/ClaimDetailPage'))
 const ApprovalQueuePage = lazy(() => import('@/modules/expenses/ApprovalQueuePage'))
 const ExpensesReportPage = lazy(() => import('@/modules/expenses/ExpensesReportPage'))
+const MonthEndPage = lazy(() => import('@/modules/monthend/MonthEndPage'))
+const CloseSharePage = lazy(() => import('@/modules/monthend/CloseSharePage'))
 const PeoplePage = lazy(() => import('@/modules/people/PeoplePage'))
 const PersonDetailPage = lazy(() => import('@/modules/people/PersonDetailPage'))
 const OnboardingFormPage = lazy(() => import('@/modules/people/OnboardingFormPage'))
@@ -55,6 +57,8 @@ export default function App() {
             <Route path="/sign-in" element={<SignIn />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            {/* Read-only month end progress behind a share token — no login. */}
+            <Route path="/close/:token" element={<CloseSharePage />} />
             {/* Tokenised onboarding — no login needed to start */}
             <Route
               path="/onboard/:token"
@@ -88,6 +92,7 @@ export default function App() {
               <Route path="expenses/approvals" element={<Page><ApprovalQueuePage /></Page>} />
               <Route path="expenses/report" element={<Page><ExpensesReportPage /></Page>} />
               <Route path="expenses/:id" element={<Page><ClaimDetailPage /></Page>} />
+              <Route path="month-end" element={<Page><MonthEndPage /></Page>} />
               <Route path="people" element={<Page><PeoplePage /></Page>} />
               <Route path="people/:id" element={<Page><PersonDetailPage /></Page>} />
               <Route path="imports/*" element={<Page><ImportsPage /></Page>} />

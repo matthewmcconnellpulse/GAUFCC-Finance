@@ -44,6 +44,7 @@ function useNavSections(): NavSection[] {
       label: null,
       items: [
         { to: '/expenses', label: 'Expenses', show: true },
+        { to: '/month-end', label: 'Month end', show: p.isPulse || p.isCeo || p.isTrustee },
         { to: '/people', label: 'People', show: p.isAdmin || p.isPayroll || p.isCeo },
         { to: '/imports', label: 'Imports', show: p.isPulse },
         { to: '/vat', label: 'VAT', show: p.isPulse || p.isCeo || p.isTrustee },

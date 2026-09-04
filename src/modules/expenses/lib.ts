@@ -442,7 +442,20 @@ export async function fetchLinesForClaims(claimIds: string[]): Promise<Map<strin
 }
 
 export type NewLineValues = Pick<ExpenseLine, 'date' | 'description' | 'net' | 'vat' | 'gross'> &
-  Partial<Pick<ExpenseLine, 'category' | 'fund_id' | 'receipt_storage_path' | 'ai_extraction' | 'ai_confidence'>>
+  Partial<
+    Pick<
+      ExpenseLine,
+      | 'category'
+      | 'fund_id'
+      | 'receipt_storage_path'
+      | 'receipt_sha256'
+      | 'ai_extraction'
+      | 'ai_confidence'
+      | 'is_mileage'
+      | 'miles'
+      | 'mileage_rate_pence'
+    >
+  >
 
 export async function insertLine(claimId: string, values: NewLineValues): Promise<ExpenseLine> {
   const { data, error } = await supabase
@@ -643,4 +656,77 @@ export const ALL_STATUSES: ClaimStatus[] = [
 /** Distinct periods present in a claim list, newest first. */
 export function periodOptions(claims: Array<Pick<ExpenseClaim, 'period'>>): string[] {
   return [...new Set(claims.map((c) => c.period))].sort((a, b) => b.localeCompare(a))
+}
+
+// ── Duplicate receipts ───────────────────────────────────────────────────────
+
+/**
+ * SHA-256 of the file, hex. Computed in the browser before upload so the same
+ * photo re-submitted later is recognised byte-for-byte, whoever claims it.
+ * Returns null where SubtleCrypto is unavailable (http:// origins) — the
+ * date-and-amount check still applies, so detection degrades rather than
+ * breaking the upload.
+ */
+export async function fileSha256(file: File): Promise<string | null> {
+  try {
+    if (!globalThis.crypto?.subtle) return null
+    const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+  } catch {
+    return null
+  }
+}
+
+export type DuplicateMatchType = 'exact_file' | 'same_date_amount'
+
+export interface DuplicateWarning {
+  lineId: string
+  matchType: DuplicateMatchType
+  otherClaimId: string
+  otherClaimStatus: ClaimStatus
+  otherSubmitter: string
+  otherDate: string
+  otherGross: number
+  otherIsMine: boolean
+}
+
+/**
+ * Duplicate warnings for one claim, via the claim_duplicate_warnings RPC.
+ * The RPC looks across everyone's claims (a receipt claimed twice by two
+ * people is exactly what needs catching) and returns only a summary of the
+ * earlier claim. Exact file matches are reported ahead of date-and-amount
+ * coincidences, which are a prompt to check rather than proof.
+ */
+export async function fetchDuplicateWarnings(claimId: string): Promise<Map<string, DuplicateWarning[]>> {
+  const { data, error } = await supabase.rpc('claim_duplicate_warnings', { p_claim_id: claimId })
+  if (error) throw new Error(error.message)
+  const rows = (data ?? []) as Array<{
+    line_id: string
+    match_type: DuplicateMatchType
+    other_claim_id: string
+    other_claim_status: ClaimStatus
+    other_submitter: string
+    other_date: string
+    other_gross: number | string
+    other_is_mine: boolean
+  }>
+  const byLine = new Map<string, DuplicateWarning[]>()
+  for (const r of rows) {
+    const list = byLine.get(r.line_id) ?? []
+    list.push({
+      lineId: r.line_id,
+      matchType: r.match_type,
+      otherClaimId: r.other_claim_id,
+      otherClaimStatus: r.other_claim_status,
+      otherSubmitter: r.other_submitter,
+      otherDate: r.other_date,
+      otherGross: Number(r.other_gross),
+      otherIsMine: r.other_is_mine,
+    })
+    byLine.set(r.line_id, list)
+  }
+  for (const list of byLine.values()) {
+    list.sort((a, b) => (a.matchType === b.matchType ? 0 : a.matchType === 'exact_file' ? -1 : 1))
+  }
+  return byLine
 }

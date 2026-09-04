@@ -31,6 +31,7 @@ import {
   createOnboardingInvite,
   downloadTextFile,
   fetchPeople,
+  isLeaver,
   onboardingLink,
   payrollCsv,
 } from './lib'
@@ -247,6 +248,9 @@ export default function PeoplePage() {
   const people = useSupabaseQuery(fetchPeople, [])
   const [stageFilter, setStageFilter] = useState<OnboardingStatus | null>(null)
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
+  // Leavers stay out of the register by default — the working list is people
+  // who are still here.
+  const [showLeavers, setShowLeavers] = useState(false)
   const [search, setSearch] = useState('')
   const [inviteOpen, setInviteOpen] = useState(false)
 
@@ -254,6 +258,7 @@ export default function PeoplePage() {
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
     return rows.filter((p) => {
+      if (isLeaver(p) !== showLeavers) return false
       if (stageFilter && p.onboarding_status !== stageFilter) return false
       if (typeFilter !== 'all' && p.type !== typeFilter) return false
       if (q) {
@@ -262,12 +267,16 @@ export default function PeoplePage() {
       }
       return true
     })
-  }, [rows, stageFilter, typeFilter, search])
+  }, [rows, stageFilter, typeFilter, showLeavers, search])
+
+  const leaverCount = useMemo(() => rows.filter(isLeaver).length, [rows])
 
   const exportable = useMemo(
     () =>
       rows.filter(
-        (p) => p.onboarding_status === 'verified' || p.onboarding_status === 'complete',
+        (p) =>
+          !isLeaver(p) &&
+          (p.onboarding_status === 'verified' || p.onboarding_status === 'complete'),
       ),
     [rows],
   )
@@ -380,6 +389,18 @@ export default function PeoplePage() {
                     </button>
                   ))}
                 </div>
+                <button
+                  onClick={() => setShowLeavers((v) => !v)}
+                  aria-pressed={showLeavers}
+                  className={cx(
+                    'rounded-full px-3 py-1 text-[11px] font-medium transition-colors',
+                    showLeavers
+                      ? 'bg-indigo text-paper'
+                      : 'text-stone-500 hover:text-indigo hover:bg-paper-2',
+                  )}
+                >
+                  Leavers{leaverCount > 0 ? ` · ${leaverCount}` : ''}
+                </button>
                 {stageFilter ? (
                   <button
                     onClick={() => setStageFilter(null)}
@@ -392,8 +413,12 @@ export default function PeoplePage() {
 
               {visible.length === 0 ? (
                 <EmptyState
-                  title="No matches"
-                  hint="Try a different search, or clear the stage and type filters."
+                  title={showLeavers ? 'No leavers' : 'No matches'}
+                  hint={
+                    showLeavers
+                      ? 'Nobody has been marked as a leaver yet.'
+                      : 'Try a different search, or clear the stage and type filters.'
+                  }
                 />
               ) : (
                 <div className="overflow-x-auto">

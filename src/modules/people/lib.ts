@@ -82,6 +82,55 @@ export async function updatePerson(id: string, patch: PersonPatch): Promise<void
   if (error) throw new Error(error.message)
 }
 
+// ── Leavers ──────────────────────────────────────────────────────────────────
+
+/** Someone who has left: the record stays, out of the working list. */
+export function isLeaver(person: Person): boolean {
+  return person.archived_at != null
+}
+
+/**
+ * Mark someone as a leaver: records the last working day and files the record
+ * away. Nothing is destroyed — payroll history, documents and any expense
+ * claims stay exactly as they were, and restoreLeaver undoes it.
+ */
+export async function markLeaver(
+  id: string,
+  byProfileId: string,
+  endDate: string,
+  note?: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('people')
+    .update({
+      end_date: endDate || null,
+      leaver_note: note && note.trim() !== '' ? note.trim() : null,
+      archived_at: new Date().toISOString(),
+      archived_by: byProfileId,
+    })
+    .eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+export async function restoreLeaver(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('people')
+    .update({ end_date: null, leaver_note: null, archived_at: null, archived_by: null })
+    .eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Permanently delete a person record and the documents they uploaded
+ * (pulse_admin only; the edge function refuses while a portal login is still
+ * attached, and audit-logs the record's details before it goes).
+ */
+export async function deletePerson(id: string): Promise<{ documents_removed: number }> {
+  return invokeFunction<{ ok: boolean; documents_removed: number }>('delete-person', {
+    person_id: id,
+  })
+}
+
 /**
  * Create-or-link a login for an employee/volunteer WITHOUT any email being
  * sent (pulse_admin or ceo — the person-login-link function enforces it,

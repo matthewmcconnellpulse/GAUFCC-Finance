@@ -285,6 +285,8 @@ export interface ExpenseLine {
   receipt_storage_path: string | null
   ai_extraction: AiExtraction | null
   ai_confidence: number | null // 0–1
+  /** SHA-256 of the uploaded receipt file — powers duplicate detection. */
+  receipt_sha256: string | null
   /** Mileage lines: amount = miles × rate; the rate is frozen on the line. */
   is_mileage: boolean
   miles: number | null
@@ -313,6 +315,11 @@ export interface Person {
   role_title: string | null
   volunteer_capacity: string | null
   start_date: string | null
+  /** Leavers: last working day, plus an archive stamp that hides the record. */
+  end_date: string | null
+  leaver_note: string | null
+  archived_at: string | null
+  archived_by: string | null
   onboarding_status: OnboardingStatus
   profile_id: string | null
   created_at: string
@@ -537,6 +544,48 @@ export interface BoardPack {
   version: number
   commentary: unknown
   created_by: string
+  created_at: string
+  updated_at: string
+}
+
+// ── Month end close ──────────────────────────────────────────────────────────
+
+export type CloseTaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done' | 'not_applicable'
+export type ClosePeriodStatus = 'in_progress' | 'complete' | 'reopened'
+
+export interface ClosePeriod {
+  id: string
+  period: string // 'YYYY-MM'
+  status: ClosePeriodStatus
+  note: string | null
+  share_token: string
+  share_enabled: boolean
+  opened_by: string | null
+  opened_at: string
+  completed_by: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CloseTask {
+  id: string
+  period_id: string
+  template_key: string | null
+  group_label: string
+  title: string
+  detail: string | null
+  /** In-app route for the work itself, e.g. '/imports/hsbc'. */
+  link_to: string | null
+  /** Work that happens outside the platform, e.g. Xero bank reconciliation. */
+  external_url: string | null
+  sort_order: number
+  is_client_signoff: boolean
+  assignee_id: string | null
+  status: CloseTaskStatus
+  note: string | null
+  signed_off_by: string | null
+  signed_off_at: string | null
   created_at: string
   updated_at: string
 }

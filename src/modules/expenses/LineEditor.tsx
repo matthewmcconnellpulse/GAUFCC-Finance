@@ -10,12 +10,14 @@ import type { ExpenseLine } from '@/types/db'
 import { ReceiptThumb, UploadIcon, XIcon } from './components'
 import {
   DEFAULT_MILEAGE_RATE_PENCE,
+  CLAIM_STATUS_LABELS,
   isLowConfidence,
   mileageAmount,
   mileageDescription,
   needsConfirmation,
   round2,
   type CategoryOption,
+  type DuplicateWarning,
   type FundOption,
   type StoredExtraction,
 } from './lib'
@@ -31,6 +33,7 @@ export function LineCard({
   funds,
   mode,
   mileageRatePence = DEFAULT_MILEAGE_RATE_PENCE,
+  duplicates,
   onPatch,
   onDelete,
   onConfirm,
@@ -41,6 +44,8 @@ export function LineCard({
   mode: LineMode
   /** Company pence-per-mile rate, offered as the default on new mileage lines. */
   mileageRatePence?: number
+  /** Earlier claims carrying this receipt, or the same date and amount. */
+  duplicates?: DuplicateWarning[]
   onPatch: (patch: Partial<ExpenseLine>) => void
   onDelete?: () => void
   onConfirm?: () => void
@@ -371,6 +376,8 @@ export function LineCard({
           </div>
           )}
 
+          {duplicates && duplicates.length > 0 ? <DuplicateNotice matches={duplicates} /> : null}
+
           {extraction?.suggested_category && !line.category && categories.length > 0 ? (
             <div className="text-[10.5px] text-stone-500 mt-2">
               AI suggested '{extraction.suggested_category}' but it didn't match an account — pick one or leave it for Pulse.
@@ -394,6 +401,43 @@ export function LineCard({
           ) : null}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Duplicate warning. An exact file match is stated plainly — the same receipt
+ * image has been claimed before. A date-and-amount match is a coincidence
+ * worth a look, not an accusation, so it is worded as one. Either way it is
+ * advisory: nothing is blocked, because a genuine pair of identical fares on
+ * the same day does happen.
+ */
+function DuplicateNotice({ matches }: { matches: DuplicateWarning[] }) {
+  const exact = matches.filter((m) => m.matchType === 'exact_file')
+  const shown = exact.length > 0 ? exact : matches
+  const m = shown[0]
+  const who = m.otherIsMine ? 'one of your own claims' : `a claim by ${m.otherSubmitter}`
+  const when = new Date(m.otherDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  const amount = `£${m.otherGross.toFixed(2)}`
+  const status = CLAIM_STATUS_LABELS[m.otherClaimStatus].toLowerCase()
+  return (
+    <div className="rounded-control border border-warn/60 bg-warn/5 px-3 py-2.5">
+      <p className="text-[11.5px] text-warn-ink leading-relaxed">
+        <b className="font-medium">
+          {exact.length > 0 ? 'This receipt has been claimed before' : 'Possible duplicate'}
+        </b>{' '}
+        {exact.length > 0 ? (
+          <>
+            The same file is already on {who} — {amount} dated {when} ({status}).
+          </>
+        ) : (
+          <>
+            {who} has a line for {amount} dated {when} ({status}). Worth checking it is not the same
+            expense.
+          </>
+        )}
+        {shown.length > 1 ? ` And ${shown.length - 1} other ${shown.length === 2 ? 'match' : 'matches'}.` : ''}
+      </p>
     </div>
   )
 }
