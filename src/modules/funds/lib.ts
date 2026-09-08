@@ -212,6 +212,12 @@ export interface PlSummary {
  * source-type fallback for unmapped codes; balance sheet classes are set
  * aside. Authoritative period figures come from v_fund_monthly /
  * v_fund_balances — this view exists for the drill-down narrative.
+ *
+ * Amounts keep their sign. A credit on an expense account is a gain, not
+ * spending: unrealised investment gains land in 'Capital Gains and Losses'
+ * as credits, and taking the absolute value turned a £44k gain into £44k of
+ * expenditure — the fund then read as £68k down instead of £19k up. Xero
+ * shows such a credit as a negative cost within expenditure, and so do we.
  */
 export function buildPl(
   txns: Array<Pick<XeroTransaction, 'account_code' | 'net' | 'source_type'>>,
@@ -238,7 +244,7 @@ export function buildPl(
         class: cls as BalanceSheetClass,
         account_code: code,
         account_name: name,
-        amount: Math.abs(entry.net),
+        amount: round2(entry.net),
       })
       continue
     }
@@ -247,20 +253,28 @@ export function buildPl(
       sorp: account?.sorp ?? null,
       account_code: code,
       account_name: name,
-      amount: Math.abs(entry.net),
+      amount: round2(entry.net),
     }
     ;(isIncome ? income : expenditure).push(row)
   }
-  income.sort((a, b) => b.amount - a.amount)
-  expenditure.sort((a, b) => b.amount - a.amount)
-  balanceSheet.sort((a, b) => b.amount - a.amount)
+  // Biggest first by size, so a large gain sorts with the large costs rather
+  // than falling to the bottom for being negative.
+  const bySize = (a: { amount: number }, b: { amount: number }) =>
+    Math.abs(b.amount) - Math.abs(a.amount)
+  income.sort(bySize)
+  expenditure.sort(bySize)
+  balanceSheet.sort(bySize)
   return {
     income,
     expenditure,
     balanceSheet,
-    totalIncome: income.reduce((s, r) => s + r.amount, 0),
-    totalExpenditure: expenditure.reduce((s, r) => s + r.amount, 0),
+    totalIncome: round2(income.reduce((s, r) => s + r.amount, 0)),
+    totalExpenditure: round2(expenditure.reduce((s, r) => s + r.amount, 0)),
   }
+}
+
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100
 }
 
 // ── Balance series ───────────────────────────────────────────────────────────

@@ -112,21 +112,32 @@ export default function FundDetailPage() {
 
   const accounts = useSupabaseQuery(fetchAccountMap, [])
 
+  // Every line in the period, walked in chunks. This MUST be paginated: a
+  // single request is capped at 1,000 rows, and a fund with a busier year
+  // than that would silently lose the overflow — the income and expenditure
+  // card would then show short figures, or miss whole accounts, with nothing
+  // on screen to say so.
   const plRows = useSupabaseQuery(async () => {
     if (!id) return null
+    type PlLine = Pick<XeroTransaction, 'account_code' | 'net' | 'source_type'>
     const ids = await fetchTrackingIds(id)
-    if (ids.length === 0) return { rows: [] as Array<Pick<XeroTransaction, 'account_code' | 'net' | 'source_type'>>, unlinked: true }
-    const { data, error } = await supabase
-      .from('xero_transactions')
-      .select('account_code, net, source_type')
-      .in('tracking_option_1_id', ids)
-      .gte('date', period.start)
-      .lte('date', period.end)
-    if (error) throw new Error(error.message)
-    return {
-      rows: (data ?? []) as Array<Pick<XeroTransaction, 'account_code' | 'net' | 'source_type'>>,
-      unlinked: false,
+    if (ids.length === 0) return { rows: [] as PlLine[], unlinked: true }
+    const rows: PlLine[] = []
+    for (let offset = 0; offset < ALL_CAP; offset += ALL_CHUNK) {
+      const { data, error } = await supabase
+        .from('xero_transactions')
+        .select('account_code, net, source_type')
+        .in('tracking_option_1_id', ids)
+        .gte('date', period.start)
+        .lte('date', period.end)
+        .order('date', { ascending: true })
+        .order('line_id', { ascending: true })
+        .range(offset, offset + ALL_CHUNK - 1)
+      if (error) throw new Error(error.message)
+      rows.push(...((data ?? []) as PlLine[]))
+      if (!data || data.length < ALL_CHUNK) break
     }
+    return { rows, unlinked: false }
   }, [id, period.start, period.end])
 
   // Statement backbone: every line the fund has in the period (minimal
@@ -698,6 +709,15 @@ function accountLabel(code: string | null, accounts: Map<string, { name: string;
 }
 
 /** Rows grouped under their SORP (SOFA) heading, headings in statutory order. */
+/**
+ * Accounts convention for a statement figure: a credit inside a debit column
+ * (or the reverse) shows in brackets, as Xero and every set of accounts does.
+ * Reading our fund page beside Xero's P&L should not need translation.
+ */
+function plFigure(value: number): string {
+  return value < 0 ? `(${formatMoney(Math.abs(value))})` : formatMoney(value)
+}
+
 function groupBySorp(
   rows: PlRow[],
   order: SorpCategory[],
@@ -715,7 +735,7 @@ function groupBySorp(
     const groupRows = byCategory.get(key) ?? []
     return {
       key,
-      label: key === 'unmapped' ? 'Unmapped' : sorpLabel(key as SorpCategory),
+      label: key === 'unmapped' ? 'Not yet mapped to a SORP heading' : sorpLabel(key as SorpCategory),
       rows: groupRows,
       total: groupRows.reduce((s, r) => s + r.amount, 0),
     }
@@ -767,7 +787,7 @@ function BalanceSheetTable({ rows }: { rows: BalanceSheetRow[] }) {
                   <span className="font-mono text-[10.5px] text-stone-500 mr-1.5">{r.account_code}</span>
                   {r.account_name}
                 </span>
-                <span className="figure text-[11.5px] whitespace-nowrap">{formatMoney(r.amount)}</span>
+                <span className="figure text-[11.5px] whitespace-nowrap">{plFigure(r.amount)}</span>
               </li>
             ))}
           </ul>
@@ -809,7 +829,7 @@ function PlSection({
             <div className="flex justify-between gap-4 pt-2 pb-0.5">
               <span className="text-[10.5px] font-medium text-indigo/80">{group.label}</span>
               <span className="figure text-[10.5px] text-stone-500 whitespace-nowrap">
-                {formatMoney(group.total)}
+                {plFigure(group.total)}
               </span>
             </div>
             <ul>
@@ -819,7 +839,7 @@ function PlSection({
                   className="flex justify-between gap-4 py-1.5 pl-3 border-b border-paper-3"
                 >
                   <span className="text-stone-700 truncate">{r.account_name}</span>
-                  <span className="figure text-[11.5px] whitespace-nowrap">{formatMoney(r.amount)}</span>
+                  <span className="figure text-[11.5px] whitespace-nowrap">{plFigure(r.amount)}</span>
                 </li>
               ))}
             </ul>
@@ -829,7 +849,7 @@ function PlSection({
       <div className="flex justify-between pt-1.5">
         <span className="text-stone-500 text-[11px]">Total {label.toLowerCase()}</span>
         <span className={`figure text-[12px] font-medium ${positive ? 'text-mint-900' : 'text-ink'}`}>
-          {formatMoney(total)}
+          {plFigure(total)}
         </span>
       </div>
     </div>
