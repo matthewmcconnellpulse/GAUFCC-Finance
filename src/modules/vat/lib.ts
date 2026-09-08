@@ -107,12 +107,17 @@ export async function pullXeroCandidates(start: string, end: string): Promise<Xe
   let incomeLines = 0
   let inputVatTotal = 0
   let expenseLines = 0
+  // Signs are meaningful: since the mirror stores lines account-natural, a
+  // refund paid out of an income account arrives negative and must REDUCE
+  // taxable income, and a supplier refund must reduce recoverable input VAT.
+  // Taking the absolute value added them instead, overstating both figures on
+  // a return that goes to HMRC.
   for (const t of txns) {
     if (INCOME_SOURCES.has(t.source_type)) {
-      incomeTotal += Math.abs(t.net)
+      incomeTotal += t.net
       incomeLines += 1
     } else if (EXPENSE_SOURCES.has(t.source_type)) {
-      inputVatTotal += Math.abs(t.vat)
+      inputVatTotal += t.vat
       expenseLines += 1
     }
   }
@@ -166,7 +171,9 @@ export async function fetchRollingTurnover(today = new Date()): Promise<RollingT
     for (const r of rows) {
       sawIncome = true
       const key = r.date.slice(0, 7)
-      byMonth.set(key, (byMonth.get(key) ?? 0) + Math.abs(r.net))
+      // Signed, so refunds reduce the month's turnover rather than inflating
+      // it — this figure is watched against the registration threshold.
+      byMonth.set(key, (byMonth.get(key) ?? 0) + r.net)
     }
     if (rows.length < pageSize) break
   }
