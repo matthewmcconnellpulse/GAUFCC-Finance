@@ -21,19 +21,23 @@
  * they remain visible to the integrity screens.
  *
  * ── Sign convention (money) ──────────────────────────────────────────────────
- * net/vat/gross are stored DOCUMENT-NATURAL — this is the contract the
- * deployed views (0005/0012) rely on: invoices and bank lines are stored
- * POSITIVE, and income vs expenditure is decided downstream by the account's
- * class (REVENUE → income, EXPENSE → expenditure). Credit notes are stored
- * NEGATIVE so they reduce the movement on their account's class.
+ * net/vat/gross are stored ACCOUNT-NATURAL: a plus is a credit on a
+ * credit-natural account (REVENUE, LIABILITY, EQUITY) and a debit on a
+ * debit-natural one (EXPENSE, ASSET). The sign therefore combines the
+ * DIRECTION of the money with the account's own direction — see lineSign.
+ * This is the contract the deployed views (0005/0012) rely on:
  *   fund balance = opening_balance + Σ(REVENUE net) − Σ(EXPENSE net).
- *   ACCREC +  · ACCPAY +  · RECEIVE + · SPEND + · transfers + ·
- *   ACCRECCREDIT − (reduces income) · ACCPAYCREDIT − (reduces expenditure,
- *   because the view subtracts EXPENSE net and −(−x) adds it back).
- * Worked example: a £100 bill (ACCPAY, EXPENSE) stores net +100 → balance
- * −100; a £100 supplier credit (ACCPAYCREDIT, EXPENSE) stores net −100 →
- * balance −(−100) = +100; a £200 sales invoice (ACCREC, REVENUE) stores +200
- * → balance +200. All consistent with v_fund_balances.
+ * Worked examples, all consistent with v_fund_balances:
+ *   £100 bill (ACCPAY, EXPENSE): out × debit-natural → +100 → balance −100.
+ *   £100 supplier credit (ACCPAYCREDIT, EXPENSE): in × debit-natural → −100
+ *     → balance −(−100) = +100.
+ *   £200 sales invoice (ACCREC, REVENUE): in × credit-natural → +200.
+ *   £165 customer refund (SPEND) coded to a REVENUE account: out ×
+ *     credit-natural → −165, so it reduces income and the fund balance.
+ *     Stored positive it would have added £165 of income — the bug this
+ *     convention exists to prevent.
+ * Bank transfers have no direction against a P&L account, and a line whose
+ * account class is unknown falls back to document-natural positive.
  *
  * ── source_type mapping ──────────────────────────────────────────────────────
  *   Invoices Type ACCREC → 'ACCREC', ACCPAY → 'ACCPAY'.
@@ -516,17 +520,78 @@ async function syncTrackingCategories(
   return written
 }
 
+/** Which way the money moved: +1 into the charity, -1 out, 0 neither. */
+export type MoneyDirection = 1 | -1 | 0
+
+/**
+ * Read every account's class once per pass, for the sign rule below.
+ * syncAccounts has already run by the time any document sync calls this.
+ */
+async function loadAccountClasses(svc: SupabaseClient): Promise<Map<string, string | null>> {
+  const { data, error } = await svc
+    .from('xero_accounts')
+    .select('code, class')
+    .not('code', 'is', null)
+    .limit(10000)
+  if (error) throw new Error(`Could not read xero_accounts for the sign rule: ${error.message}`)
+  return new Map(((data ?? []) as { code: string; class: string | null }[]).map((a) => [a.code, a.class]))
+}
+
+/**
+ * A line's sign combines WHICH WAY THE MONEY WENT with WHICH WAY THE ACCOUNT
+ * RUNS, because those two can disagree.
+ *
+ * Income and asset accounts run opposite ways: a credit is a plus on income,
+ * a debit is a plus on a cost. Storing every bank line positive works only
+ * while payments land on cost accounts and receipts on income accounts — and
+ * refunds break exactly that. A £165 customer refund paid OUT of 'British
+ * Book Titles and Sundry Sales' was stored +165 and so ADDED to income
+ * instead of reducing it, overstating both the income and expenditure card
+ * and the fund balance. The same happens in reverse for a supplier refund
+ * received into a cost account.
+ *
+ * So: money in is a plus on a credit-natural account (REVENUE, LIABILITY,
+ * EQUITY) and a minus on a debit-natural one (EXPENSE, ASSET); money out is
+ * the other way round. This keeps the contract the views rely on
+ * (income = Σ REVENUE net, expenditure = Σ EXPENSE net, fund balance =
+ * opening + income − expenditure) and every worked example below unchanged,
+ * while putting the contradictory cases the right way up.
+ *
+ * With no direction (bank transfers) or no known account class, the line
+ * falls back to document-natural positive, as before.
+ */
+function creditNatural(accountClass: string | null | undefined): boolean | null {
+  const c = accountClass?.toUpperCase()
+  if (c === 'REVENUE' || c === 'LIABILITY' || c === 'EQUITY') return true
+  if (c === 'EXPENSE' || c === 'ASSET') return false
+  return null
+}
+
+function lineSign(
+  direction: MoneyDirection,
+  accountCode: string | null | undefined,
+  classByCode: Map<string, string | null>,
+): 1 | -1 {
+  if (direction === 0) return 1
+  const isCredit = creditNatural(accountCode ? classByCode.get(accountCode) : null)
+  if (isCredit === null) return 1
+  const natural = isCredit ? 1 : -1
+  return direction * natural > 0 ? 1 : -1
+}
+
 /** Flatten one Xero document into line-level xero_transactions rows. */
 function flattenDocument(opts: {
   docId: string
   sourceType: SourceType
-  sign: 1 | -1
+  /** Direction of the money; the account's class decides the stored sign. */
+  direction: MoneyDirection
+  classByCode: Map<string, string | null>
   doc: XeroDocumentApi
   tracking: TrackingIndex
   errors: string[]
   docLabel: string
 }): TransactionRow[] {
-  const { docId, sourceType, sign, doc, tracking, errors, docLabel } = opts
+  const { docId, sourceType, direction, classByCode, doc, tracking, errors, docLabel } = opts
   const dateIso = parseXeroDate(doc.DateString ?? doc.Date)
   if (!dateIso) {
     errors.push(`Skipped ${docLabel} ${docId} — document has no parseable date`)
@@ -550,10 +615,12 @@ function flattenDocument(opts: {
   }
 
   if (lines.length === 0) {
-    // Bank transfers and some system documents carry no line items — keep one
-    // row from the document totals so integrity screens still see them.
-    const net = round2(sign * (doc.SubTotal ?? doc.Total ?? 0))
-    const vat = round2(sign * (doc.TotalTax ?? 0))
+    // Bank transfers and some system documents carry no line items, so there
+    // is no account and no class to reason about — keep the document total
+    // document-natural so the integrity screens still see the document.
+    const docSign = direction === -1 ? -1 : 1
+    const net = round2(docSign * (doc.SubTotal ?? doc.Total ?? 0))
+    const vat = round2(docSign * (doc.TotalTax ?? 0))
     return [
       {
         ...base,
@@ -574,6 +641,7 @@ function flattenDocument(opts: {
       li.UnitAmount !== undefined && li.UnitAmount !== null
         ? round2(li.UnitAmount * (li.Quantity ?? 1))
         : (li.LineAmount ?? 0)
+    const sign = lineSign(direction, li.AccountCode, classByCode)
     const net = round2(sign * rawNet)
     const vat = round2(sign * (li.TaxAmount ?? 0))
     let tracking1: string | null = null
@@ -612,16 +680,19 @@ async function syncInvoices(
     { where: 'Status!="DELETED"&&Status!="VOIDED"' },
     modifiedSince,
   )
+  if (!invoices.length) return 0
+  const classByCode = await loadAccountClasses(svc)
   const rows: TransactionRow[] = []
   for (const inv of invoices) {
-    // Document-natural: both sales invoices (ACCREC/REVENUE) and bills
-    // (ACCPAY/EXPENSE) store positive; the view separates them by account class.
-    const sign: 1 | -1 = 1
+    // A sales invoice brings money in, a bill sends it out; the account's
+    // class then decides the stored sign (see lineSign).
+    const direction: MoneyDirection = inv.Type === 'ACCPAY' ? -1 : 1
     rows.push(
       ...flattenDocument({
         docId: inv.InvoiceID,
         sourceType: inv.Type,
-        sign,
+        direction,
+        classByCode,
         doc: inv,
         tracking,
         errors,
@@ -638,28 +709,26 @@ async function syncInvoices(
   )
 }
 
-function mapBankTransactionType(type: string): { source: SourceType; sign: 1 | -1 } | null {
-  // Document-natural sign: bank lines store positive; the view's account-class
-  // filter (EXPENSE vs REVENUE) decides whether a line reduces or grows the
-  // fund balance. SPEND lines are almost always coded to EXPENSE accounts and
-  // are therefore subtracted by v_fund_balances.
+function mapBankTransactionType(type: string): { source: SourceType; direction: MoneyDirection } | null {
+  // SPEND sends money out, RECEIVE brings it in, and the account's class then
+  // decides the stored sign (see lineSign). Transfers move between two of the
+  // charity's own accounts, so they have no direction against a P&L account.
   switch (type) {
     case 'SPEND':
-      return { source: 'SPEND', sign: 1 }
+      return { source: 'SPEND', direction: -1 }
     case 'RECEIVE':
-      return { source: 'RECEIVE', sign: 1 }
+      return { source: 'RECEIVE', direction: 1 }
     case 'SPEND-TRANSFER':
-      return { source: 'BANK_TRANSFER', sign: 1 }
     case 'RECEIVE-TRANSFER':
-      return { source: 'BANK_TRANSFER', sign: 1 }
+      return { source: 'BANK_TRANSFER', direction: 0 }
     case 'SPEND-PREPAYMENT':
-      return { source: 'PREPAYMENT', sign: 1 }
+      return { source: 'PREPAYMENT', direction: -1 }
     case 'RECEIVE-PREPAYMENT':
-      return { source: 'PREPAYMENT', sign: 1 }
+      return { source: 'PREPAYMENT', direction: 1 }
     case 'SPEND-OVERPAYMENT':
-      return { source: 'OVERPAYMENT', sign: 1 }
+      return { source: 'OVERPAYMENT', direction: -1 }
     case 'RECEIVE-OVERPAYMENT':
-      return { source: 'OVERPAYMENT', sign: 1 }
+      return { source: 'OVERPAYMENT', direction: 1 }
     default:
       return null
   }
@@ -677,6 +746,8 @@ async function syncBankTransactions(
     { where: 'Status!="DELETED"' },
     modifiedSince,
   )
+  if (!transactions.length) return 0
+  const classByCode = await loadAccountClasses(svc)
   const rows: TransactionRow[] = []
   for (const tx of transactions) {
     const mapped = mapBankTransactionType(tx.Type)
@@ -688,7 +759,8 @@ async function syncBankTransactions(
       ...flattenDocument({
         docId: tx.BankTransactionID,
         sourceType: mapped.source,
-        sign: mapped.sign,
+        direction: mapped.direction,
+        classByCode,
         doc: tx,
         tracking,
         errors,
@@ -717,18 +789,21 @@ async function syncCreditNotes(
     { where: 'Status!="DELETED"&&Status!="VOIDED"' },
     modifiedSince,
   )
+  if (!creditNotes.length) return 0
+  const classByCode = await loadAccountClasses(svc)
   const rows: TransactionRow[] = []
   for (const cn of creditNotes) {
-    // Both credit-note types store NEGATIVE: a sales credit (ACCRECCREDIT,
-    // REVENUE account) reduces income; a supplier credit (ACCPAYCREDIT,
-    // EXPENSE account) reduces expenditure because the view subtracts EXPENSE
-    // net and −(−x) adds it back to the balance.
-    const sign: 1 | -1 = -1
+    // A credit note runs the opposite way to the document it credits: a sales
+    // credit gives money back (reducing income), a supplier credit takes it
+    // back (reducing expenditure). Direction plus account class gives the
+    // same negatives as before for the ordinary cases.
+    const direction: MoneyDirection = cn.Type === 'ACCPAYCREDIT' ? 1 : -1
     rows.push(
       ...flattenDocument({
         docId: cn.CreditNoteID,
         sourceType: 'CREDIT_NOTE',
-        sign,
+        direction,
+        classByCode,
         doc: cn,
         tracking,
         errors,
@@ -767,19 +842,7 @@ async function syncManualJournals(
   )
   if (!journals.length) return 0
 
-  // Journal sign normalisation needs the account's class — read the mirror
-  // (syncAccounts has already run this pass).
-  const { data: accountRows, error: accountError } = await svc
-    .from('xero_accounts')
-    .select('code, class')
-    .not('code', 'is', null)
-    .limit(10000)
-  if (accountError) {
-    throw new Error(`Could not read xero_accounts for journal sync: ${accountError.message}`)
-  }
-  const classByCode = new Map(
-    ((accountRows ?? []) as { code: string; class: string | null }[]).map((a) => [a.code, a.class]),
-  )
+  const classByCode = await loadAccountClasses(svc)
 
   const rows: TransactionRow[] = []
   for (const mj of journals) {
@@ -801,8 +864,11 @@ async function syncManualJournals(
     ;(mj.JournalLines ?? []).forEach((li, index) => {
       let rawNet = li.LineAmount ?? 0
       if (mj.LineAmountTypes === 'Inclusive') rawNet = round2(rawNet - (li.TaxAmount ?? 0))
+      // Journal lines arrive debit-positive; flip the credit-natural accounts
+      // so a credit to income reads as positive income, exactly as the
+      // document paths now do.
       const accountClass = li.AccountCode ? classByCode.get(li.AccountCode) : undefined
-      const sign: 1 | -1 = accountClass === 'REVENUE' ? -1 : 1
+      const sign: 1 | -1 = creditNatural(accountClass) === true ? -1 : 1
       let tracking1: string | null = null
       let tracking2: string | null = null
       for (const t of li.Tracking ?? []) {

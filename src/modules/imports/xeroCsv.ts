@@ -30,9 +30,14 @@ export function buildCsv(headers: string[], rows: Array<Array<string | number | 
   return lines.join('\r\n') + '\r\n'
 }
 
-/** Client-side Blob download. */
+/**
+ * Client-side Blob download. CSVs carry a UTF-8 BOM: Excel and Xero's
+ * importer both fall back to Windows-1252 without one, which turns pound
+ * signs and dashes into mojibake in whatever reads the file next.
+ */
 export function downloadTextFile(fileName: string, text: string, mime = 'text/csv;charset=utf-8'): void {
-  const blob = new Blob([text], { type: mime })
+  const needsBom = mime.includes('csv') && !text.startsWith('\uFEFF')
+  const blob = new Blob([needsBom ? `\uFEFF${text}` : text], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -137,7 +142,11 @@ export function buildEpworthJournalCsv(lines: JournalLine[], settings: JournalSe
     const amount = round2(line.amount)
     if (amount === 0) continue
     const assetCode = settings.assetAccountCodesByRef[line.ref]?.trim() || settings.assetAccountCode
-    const description = `${line.fundLabel} — ${INCOME_TYPE_LABELS[line.type]} · ${line.ref}`
+    // Deliberately ASCII. This CSV is read by Xero's importer (often via
+    // Excel), which assumes Windows-1252 unless it finds a BOM — an em dash
+    // or middot arrives as "â€”" / "Â·" and is then stuck in the ledger,
+    // where no amount of re-syncing will clean it up.
+    const description = `${line.fundLabel} - ${INCOME_TYPE_LABELS[line.type]} (${line.ref})`
     rows.push([
       settings.narration,
       date,
