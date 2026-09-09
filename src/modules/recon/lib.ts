@@ -32,6 +32,16 @@ export function round2(n: number): number {
 /** Figures agree if they are within a penny — floating point, not judgement. */
 const TOLERANCE = 0.01
 
+/**
+ * Voided and deleted documents are records, not transactions.
+ *
+ * The sync clears their mirrored lines, and the integrity views exclude them
+ * too (app_private.is_live_document). Excluding them here as well keeps a
+ * voided bill out of the whole-charity result and out of the unallocated
+ * drill-down, so nobody is sent to code a bill that no longer exists.
+ */
+const DEAD_STATUSES = ['VOIDED', 'DELETED']
+
 // ── Whole-business profit and loss (from the mirror) ────────────────────────
 
 export interface PlAccountRow {
@@ -131,6 +141,7 @@ export async function fetchWholeBusinessPl(period: {
       .from('xero_transactions')
       .select('account_code, net, date, tracking_option_1_id')
       .in('account_code', plCodes)
+      .not('status', 'in', `(${DEAD_STATUSES.join(',')})`)
       .gte('date', period.start)
       .lte('date', period.end)
       .order('date', { ascending: true })
@@ -313,6 +324,7 @@ export async function fetchUnallocatedPlLines(
     .select('id, date, source_type, description, account_code, contact_name, net')
     .in('account_code', codes)
     .is('tracking_option_1_id', null)
+    .not('status', 'in', `(${DEAD_STATUSES.join(',')})`)
     .gte('date', period.start)
     .lte('date', period.end)
     .order('date', { ascending: false })
@@ -545,6 +557,103 @@ export function buildReconChecks(input: ReconInputs): ReconCheck[] {
   })
 
   return checks
+}
+
+// ── Sign-off ────────────────────────────────────────────────────────────────
+
+export interface ReconSignoff {
+  id: string
+  check_id: string
+  period_start: string
+  period_end: string
+  left_value: number | null
+  right_value: number | null
+  difference: number | null
+  note: string | null
+  signed_by: string
+  signed_at: string
+  signer_name: string | null
+}
+
+export async function fetchReconSignoffs(period: {
+  start: string
+  end: string
+}): Promise<ReconSignoff[]> {
+  const { data, error } = await supabase
+    .from('recon_signoffs')
+    .select('*, signer:profiles!recon_signoffs_signed_by_fkey(full_name)')
+    .eq('period_start', period.start)
+    .eq('period_end', period.end)
+  if (error) throw new Error(error.message)
+  return ((data ?? []) as unknown as Array<
+    Omit<ReconSignoff, 'signer_name'> & { signer: { full_name: string | null } | null }
+  >).map((row) => ({ ...row, signer_name: row.signer?.full_name ?? null }))
+}
+
+export async function signOffCheck(
+  check: ReconCheck,
+  period: { start: string; end: string },
+  userId: string,
+  note: string | null,
+): Promise<void> {
+  const { error } = await supabase.from('recon_signoffs').upsert(
+    {
+      check_id: check.id,
+      period_start: period.start,
+      period_end: period.end,
+      left_value: check.left,
+      right_value: check.right,
+      difference: check.difference,
+      note: note?.trim() || null,
+      signed_by: userId,
+      signed_at: new Date().toISOString(),
+    },
+    { onConflict: 'check_id,period_start,period_end' },
+  )
+  if (error) throw new Error(error.message)
+}
+
+export async function withdrawSignoff(id: string): Promise<void> {
+  const { error } = await supabase.from('recon_signoffs').delete().eq('id', id)
+  if (error) throw new Error(error.message)
+}
+
+export type SignoffState =
+  | { kind: 'unsigned' }
+  | { kind: 'signed'; signoff: ReconSignoff }
+  /** Signed, but the figures have moved since — the assurance no longer holds. */
+  | { kind: 'superseded'; signoff: ReconSignoff; movedBy: number | null }
+
+/**
+ * Whether a sign-off still covers the figures on screen.
+ *
+ * A tick that survives the numbers changing underneath it is worse than no
+ * tick, so the figures at sign-off are compared with the live ones and any
+ * movement demotes the sign-off to superseded. Comparing the *difference*
+ * catches the case that matters: both sides can move together while the check
+ * still agrees, and that is not something to re-sign.
+ */
+export function signoffState(
+  check: ReconCheck,
+  signoffs: ReconSignoff[],
+): SignoffState {
+  const signoff = signoffs.find((s) => s.check_id === check.id)
+  if (!signoff) return { kind: 'unsigned' }
+
+  const moved = (was: number | null, now: number | null): number | null => {
+    if (was === null && now === null) return null
+    if (was === null || now === null) return now ?? was ?? null
+    return round2(now - was)
+  }
+  const leftMove = moved(signoff.left_value, check.left)
+  const rightMove = moved(signoff.right_value, check.right)
+  const diffMove = moved(signoff.difference, check.difference)
+
+  const beyondTolerance = (v: number | null) => v !== null && Math.abs(v) > TOLERANCE
+  if (beyondTolerance(leftMove) || beyondTolerance(rightMove) || beyondTolerance(diffMove)) {
+    return { kind: 'superseded', signoff, movedBy: diffMove ?? leftMove ?? rightMove }
+  }
+  return { kind: 'signed', signoff }
 }
 
 export function checksSummary(checks: ReconCheck[]): {

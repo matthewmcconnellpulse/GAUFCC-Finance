@@ -39,6 +39,52 @@ import {
 type ViewMode = 'register' | 'cards'
 type TypeFilter = 'all' | FundType
 
+export type SortKey = 'name' | 'type' | 'balance' | 'income' | 'spend'
+export type SortDir = 'asc' | 'desc'
+
+export interface SortState {
+  key: SortKey
+  dir: SortDir
+}
+
+/**
+ * The direction a column opens on when first clicked. Money and counts open
+ * largest-first because that is the question being asked of them; a name opens
+ * A–Z.
+ */
+const SORT_DEFAULT_DIR: Record<SortKey, SortDir> = {
+  name: 'asc',
+  type: 'asc',
+  balance: 'desc',
+  income: 'desc',
+  spend: 'desc',
+}
+
+/**
+ * Fund names begin with their ledger number — "104 Restricted funds – …" —
+ * so they collate numerically, otherwise 112 would sort before 15. Type sorts
+ * by FUND_TYPE_ORDER rather than alphabetically, so restricted funds lead as
+ * they do everywhere else in the app. Spend is compared on magnitude: a credit
+ * against an expenditure account is stored negative, and sorting "largest
+ * spend" should not put those at the top.
+ */
+function compareFunds(a: VFundBalance, b: VFundBalance, key: SortKey): number {
+  switch (key) {
+    case 'name':
+      return a.name.localeCompare(b.name, 'en-GB', { numeric: true, sensitivity: 'base' })
+    case 'type': {
+      const order = FUND_TYPE_ORDER.indexOf(a.fund_type) - FUND_TYPE_ORDER.indexOf(b.fund_type)
+      return order !== 0 ? order : a.name.localeCompare(b.name, 'en-GB', { numeric: true })
+    }
+    case 'balance':
+      return a.balance - b.balance
+    case 'income':
+      return a.ytd_income - b.ytd_income
+    case 'spend':
+      return Math.abs(a.ytd_expenditure) - Math.abs(b.ytd_expenditure)
+  }
+}
+
 const TYPE_FILTERS: Array<{ value: TypeFilter; label: string }> = [
   { value: 'all', label: 'All' },
   { value: 'restricted', label: 'Restricted' },
@@ -63,6 +109,16 @@ export default function FundsPage() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [search, setSearch] = useState('')
   const [showDormant, setShowDormant] = useState(false)
+  // Balance, largest first — the order the register has always opened in.
+  const [sort, setSort] = useState<SortState>({ key: 'balance', dir: 'desc' })
+
+  function toggleSort(key: SortKey) {
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: SORT_DEFAULT_DIR[key] },
+    )
+  }
 
   const balances = useSupabaseQuery(fetchFundBalances, [])
   const trendMonths = useMemo(() => lastMonthKeys(12), [])
@@ -89,6 +145,17 @@ export default function FundsPage() {
       return true
     })
   }, [funds, typeFilter, search, showDormant])
+
+  // Sorted here rather than inside the register so the cards view orders
+  // within its groups the same way.
+  const sorted = useMemo(() => {
+    const factor = sort.dir === 'asc' ? 1 : -1
+    return [...visible].sort((a, b) => {
+      const cmp = compareFunds(a, b, sort.key) * factor
+      // A stable tie-break, so equal figures never shuffle between renders.
+      return cmp !== 0 ? cmp : a.name.localeCompare(b.name, 'en-GB', { numeric: true })
+    })
+  }, [visible, sort])
 
   const unclassified = funds.filter((f) => f.classified_at === null).length
 
@@ -210,9 +277,16 @@ export default function FundsPage() {
           <EmptyState title="No funds match" hint="Try a different filter or clear the search." />
         </Card>
       ) : view === 'register' ? (
-        <RegisterView funds={visible} sparklines={sparklines} isPulse={isPulse} onOpen={(id) => navigate(`/funds/${id}`)} />
+        <RegisterView
+          funds={sorted}
+          sparklines={sparklines}
+          isPulse={isPulse}
+          sort={sort}
+          onSort={toggleSort}
+          onOpen={(id) => navigate(`/funds/${id}`)}
+        />
       ) : (
-        <CardsView funds={visible} sparklines={sparklines} onOpen={(id) => navigate(`/funds/${id}`)} />
+        <CardsView funds={sorted} sparklines={sparklines} onOpen={(id) => navigate(`/funds/${id}`)} />
       )}
     </div>
   )
@@ -220,15 +294,66 @@ export default function FundsPage() {
 
 // ── Register (1d) ────────────────────────────────────────────────────────────
 
+/**
+ * A sortable column heading.
+ *
+ * The whole cell is the button so the hit target is the column heading rather
+ * than just its text, and aria-sort carries the state for a screen reader —
+ * the arrow alone would not.
+ */
+function SortableTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align = 'left',
+  className,
+}: {
+  label: string
+  sortKey: SortKey
+  sort: SortState
+  onSort: (key: SortKey) => void
+  align?: 'left' | 'right'
+  className?: string
+}) {
+  const active = sort.key === sortKey
+  return (
+    <th
+      className={cx('th-register p-0', className)}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cx(
+          'w-full flex items-center gap-1 px-4 py-2.5 hover:text-indigo transition-colors',
+          align === 'right' ? 'justify-end' : 'justify-start',
+          active && 'text-indigo',
+        )}
+        title={`Sort by ${label.toLowerCase()}`}
+      >
+        {label}
+        <span aria-hidden className={cx('text-[9px] leading-none', active ? 'opacity-100' : 'opacity-25')}>
+          {active && sort.dir === 'asc' ? '▲' : '▼'}
+        </span>
+      </button>
+    </th>
+  )
+}
+
 function RegisterView({
   funds,
   sparklines,
   isPulse,
+  sort,
+  onSort,
   onOpen,
 }: {
   funds: VFundBalance[]
   sparklines: Map<string, number[]>
   isPulse: boolean
+  sort: SortState
+  onSort: (key: SortKey) => void
   onOpen: (id: string) => void
 }) {
   const total = funds.reduce((s, f) => s + f.balance, 0)
@@ -238,11 +363,11 @@ function RegisterView({
         <table className="w-full text-left border-collapse min-w-[760px]">
           <thead>
             <tr>
-              <th className="th-register">Fund</th>
-              <th className="th-register">Type</th>
-              <th className="th-register text-right">Balance</th>
-              <th className="th-register text-right">YTD income</th>
-              <th className="th-register text-right">YTD spend</th>
+              <SortableTh label="Fund" sortKey="name" sort={sort} onSort={onSort} />
+              <SortableTh label="Type" sortKey="type" sort={sort} onSort={onSort} />
+              <SortableTh label="Balance" sortKey="balance" sort={sort} onSort={onSort} align="right" />
+              <SortableTh label="YTD income" sortKey="income" sort={sort} onSort={onSort} align="right" />
+              <SortableTh label="YTD spend" sortKey="spend" sort={sort} onSort={onSort} align="right" />
               <th className="th-register text-right">12-mo trend</th>
             </tr>
           </thead>

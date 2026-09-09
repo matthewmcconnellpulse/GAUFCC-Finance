@@ -9,16 +9,19 @@
  */
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useAuth, usePermissions } from '@/auth/AuthProvider'
 import {
+  Button,
   Card,
   ErrorNotice,
+  Input,
   LoadingRows,
   PageHeader,
   SectionLabel,
   StatusChip,
   cx,
 } from '@/components/ui'
-import { formatDate, formatMoney } from '@/lib/format'
+import { formatDate, formatDateTime, formatMoney } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import { fetchXeroReport } from '@/modules/financials/lib'
 import { Segmented } from '@/modules/reports/components'
@@ -26,10 +29,15 @@ import {
   buildReconChecks,
   checksSummary,
   fetchFundTotals,
+  fetchReconSignoffs,
   fetchUnallocatedPlLines,
   fetchWholeBusinessPl,
   indexReportRows,
+  signOffCheck,
+  signoffState,
+  withdrawSignoff,
   type ReconCheck,
+  type SignoffState,
 } from './lib'
 
 // GAUFCC's financial year runs 1 October – 30 September.
@@ -79,6 +87,9 @@ const STATUS_LABEL = {
 } as const
 
 export default function ReconciliationPage() {
+  const { profile } = useAuth()
+  const { isPulse, isCeo } = usePermissions()
+  const canSign = isPulse || isCeo
   const [periodKey, setPeriodKey] = useState<PeriodKey>('fy')
   const [open, setOpen] = useState<string | null>(null)
 
@@ -93,6 +104,7 @@ export default function ReconciliationPage() {
     () => fetchUnallocatedPlLines(period),
     [period.start, period.end],
   )
+  const signoffsQ = useSupabaseQuery(() => fetchReconSignoffs(period), [period.start, period.end])
 
   // Net assets can only come from Xero — the mirror holds no journal-level
   // data, so it cannot produce a complete balance sheet.
@@ -116,6 +128,13 @@ export default function ReconciliationPage() {
   }, [plQ.data, fundsQ.data, bsQ.data, bsQ.error, period.label])
 
   const summary = checks ? checksSummary(checks) : null
+  const signoffs = signoffsQ.data ?? []
+  const states = useMemo(
+    () => new Map((checks ?? []).map((c) => [c.id, signoffState(c, signoffs)])),
+    [checks, signoffs],
+  )
+  const signedCount = [...states.values()].filter((st) => st.kind === 'signed').length
+  const supersededCount = [...states.values()].filter((st) => st.kind === 'superseded').length
   const loading = (plQ.loading && !plQ.data) || (fundsQ.loading && !fundsQ.data)
   const queryError = plQ.error ?? fundsQ.error
 
@@ -165,6 +184,13 @@ export default function ReconciliationPage() {
                       ? `${summary.differences} of ${checks.length} checks show a difference.`
                       : `${summary.indeterminate} of ${checks.length} checks could not be evaluated.`}
                 </p>
+                <p className="text-[11.5px] text-stone-500 mt-1">
+                  {signedCount === checks.length
+                    ? 'Every check is signed off against the figures as they stand — these figures are robust.'
+                    : supersededCount > 0
+                      ? `${supersededCount} sign-off${supersededCount === 1 ? '' : 's'} no longer cover${supersededCount === 1 ? 's' : ''} the current figures and need re-signing.`
+                      : `${signedCount} of ${checks.length} signed off. A sign-off records the figures it was given and lapses if they move.`}
+                </p>
               </div>
               <div className="flex items-center gap-1.5">
                 {summary.agreed > 0 ? <StatusChip tone="good">{summary.agreed} agreed</StatusChip> : null}
@@ -173,6 +199,10 @@ export default function ReconciliationPage() {
                 ) : null}
                 {summary.indeterminate > 0 ? (
                   <StatusChip tone="warn">{summary.indeterminate} cannot check</StatusChip>
+                ) : null}
+                {signedCount > 0 ? <StatusChip tone="indigo">{signedCount} signed off</StatusChip> : null}
+                {supersededCount > 0 ? (
+                  <StatusChip tone="warn">{supersededCount} to re-sign</StatusChip>
                 ) : null}
               </div>
             </div>
@@ -236,6 +266,21 @@ export default function ReconciliationPage() {
                 {open === check.id && check.id === 'fund_result_vs_pl' ? (
                   <UnallocatedTable rows={unallocatedQ.data ?? []} />
                 ) : null}
+
+                <SignoffPanel
+                  check={check}
+                  state={states.get(check.id) ?? { kind: 'unsigned' }}
+                  canSign={canSign}
+                  onSign={async (note) => {
+                    if (!profile) return
+                    await signOffCheck(check, period, profile.id, note)
+                    signoffsQ.refetch()
+                  }}
+                  onWithdraw={async (id) => {
+                    await withdrawSignoff(id)
+                    signoffsQ.refetch()
+                  }}
+                />
               </Card>
             ))}
           </div>
@@ -262,6 +307,145 @@ export default function ReconciliationPage() {
           ) : null}
         </>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * Sign-off for one check.
+ *
+ * Three states are worth distinguishing and the UI shows all three: unsigned,
+ * signed against the figures on screen, and signed against figures that have
+ * since moved. The last is the one that matters — it is why the sign-off
+ * stores the figures rather than just a tick.
+ *
+ * Signing a check that shows a difference demands a reason. A difference
+ * waved through without one is precisely what this is meant to stop, so the
+ * note is required in that case and optional otherwise.
+ */
+function SignoffPanel({
+  check,
+  state,
+  canSign,
+  onSign,
+  onWithdraw,
+}: {
+  check: ReconCheck
+  state: SignoffState
+  canSign: boolean
+  onSign: (note: string | null) => Promise<void>
+  onWithdraw: (id: string) => Promise<void>
+}) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const noteRequired = check.status !== 'agreed'
+  const canSubmit = canSign && !busy && (!noteRequired || note.trim().length > 0)
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      setNote('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The sign-off could not be saved')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (state.kind === 'signed') {
+    return (
+      <div className="mt-4 pt-3 border-t border-stone-150 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11.5px] text-stone-600">
+          <StatusChip tone="good" className="mr-2">
+            Signed off
+          </StatusChip>
+          {state.signoff.signer_name ?? 'Signed'} · {formatDateTime(state.signoff.signed_at)}
+          {state.signoff.note ? <span className="text-stone-500"> — {state.signoff.note}</span> : null}
+        </div>
+        {canSign ? (
+          <button
+            disabled={busy}
+            onClick={() => void run(() => onWithdraw(state.signoff.id))}
+            className="text-[11.5px] text-stone-500 hover:text-danger-ink underline underline-offset-2"
+          >
+            Withdraw
+          </button>
+        ) : null}
+        {error ? <ErrorNotice message={error} /> : null}
+      </div>
+    )
+  }
+
+  if (state.kind === 'superseded') {
+    return (
+      <div className="mt-4 pt-3 border-t border-stone-150">
+        <div className="rounded-card border border-warn/40 bg-warn/10 px-3.5 py-2.5 text-[11.5px] text-warn-ink">
+          <b className="font-medium">This sign-off no longer covers the figures.</b>{' '}
+          {state.signoff.signer_name ?? 'Signed'} signed it on {formatDateTime(state.signoff.signed_at)} when
+          the difference stood at{' '}
+          {state.signoff.difference === null ? 'nil' : formatMoney(state.signoff.difference)}
+          {state.movedBy !== null ? `; it has moved by ${formatMoney(state.movedBy)} since` : ''}. Re-check the
+          figures and sign again.
+        </div>
+        {canSign ? (
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <Input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={noteRequired ? 'Why is this acceptable? (required)' : 'Note (optional)'}
+              className="max-w-md text-[12px]"
+            />
+            <Button
+              variant="money"
+              size="sm"
+              disabled={!canSubmit}
+              onClick={() => void run(() => onSign(note))}
+            >
+              {busy ? 'Signing…' : 'Sign off again'}
+            </Button>
+          </div>
+        ) : null}
+        {error ? <ErrorNotice message={error} /> : null}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 pt-3 border-t border-stone-150">
+      {canSign ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={
+              noteRequired
+                ? 'Why is this acceptable? (required to sign off a difference)'
+                : 'Note (optional)'
+            }
+            className="max-w-md text-[12px]"
+          />
+          <Button
+            variant="money"
+            size="sm"
+            disabled={!canSubmit}
+            onClick={() => void run(() => onSign(note))}
+          >
+            {busy ? 'Signing…' : 'Check off'}
+          </Button>
+          <span className="text-[11px] text-stone-500">
+            {noteRequired
+              ? 'Records the figures as they stand, so the sign-off lapses if they move.'
+              : 'Records who checked it and against which figures.'}
+          </span>
+        </div>
+      ) : (
+        <p className="text-[11.5px] text-stone-500">Not yet signed off.</p>
+      )}
+      {error ? <ErrorNotice message={error} /> : null}
     </div>
   )
 }

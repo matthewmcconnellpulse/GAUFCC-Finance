@@ -55,6 +55,18 @@
  *     (line_id is positional), so modified/voided journals REPLACE their
  *     mirrored rows (delete-then-insert) rather than upserting.
  *
+ * ── Voided and deleted documents ─────────────────────────────────────────────
+ * Every document endpoint is fetched WITHOUT a status filter, and each
+ * document's mirrored lines are cleared before the live ones are written back
+ * (delete-then-upsert, as the journal path has always done).
+ *
+ * This matters incrementally. Filtering VOIDED out at the fetch looks right
+ * and is correct on a full sync, but a bill synced while AUTHORISED and voided
+ * afterwards then never comes back — so its lines stay in the mirror for good,
+ * moving fund balances and appearing as "missing a fund code". Clearing by
+ * document also stops an edited document that lost a line from leaving the old
+ * line behind.
+ *
  * ── Incremental sync ─────────────────────────────────────────────────────────
  * If-Modified-Since is taken from the last *successful* run's started_at.
  * TrackingCategories does not support If-Modified-Since and is always fetched
@@ -343,6 +355,46 @@ async function upsertBatches<T extends object>(
     written += batch.length
   }
   return written
+}
+
+/**
+ * Void/deleted documents are no longer transactions.
+ *
+ * Xero keeps a voided invoice as a record with Status VOIDED, and the older
+ * fetch filtered those out — which works on a full sync but is exactly wrong
+ * incrementally: a bill synced while AUTHORISED and voided afterwards never
+ * comes back, so its lines sit in the mirror for good, moving fund balances
+ * and showing up as "missing a fund code". The document endpoints are now
+ * fetched WITHOUT a status filter and this decides what to do with each one,
+ * the same way the manual-journal path always has.
+ */
+const DEAD_STATUSES = new Set(['VOIDED', 'DELETED'])
+
+export function isDeadDocument(status: string | null | undefined): boolean {
+  return DEAD_STATUSES.has((status ?? '').toUpperCase())
+}
+
+/**
+ * Remove every mirrored line for the given documents, then the caller
+ * re-upserts the live ones. Delete-then-upsert rather than upsert alone
+ * because a document that loses a line on edit would otherwise leave the old
+ * line behind — and because it is what makes voiding actually take effect.
+ */
+async function clearDocumentRows(
+  svc: SupabaseClient,
+  sourceTypes: string[],
+  xeroIds: string[],
+): Promise<void> {
+  const ids = [...new Set(xeroIds)].filter(Boolean)
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200)
+    const { error } = await svc
+      .from('xero_transactions')
+      .delete()
+      .in('source_type', sourceTypes)
+      .in('xero_id', chunk)
+    if (error) throw new Error(`Could not clear mirrored lines: ${error.message}`)
+  }
 }
 
 /** Page through a Xero collection endpoint (100/page) until a short page. */
@@ -672,18 +724,20 @@ async function syncInvoices(
   errors: string[],
   modifiedSince?: string,
 ): Promise<number> {
+  // No status filter: a voided or deleted invoice must still arrive so its
+  // mirrored lines can be removed. Filtering them out at the fetch works on a
+  // full sync and fails incrementally — see isDeadDocument.
   const invoices = await fetchAllPages<XeroInvoiceApi>(
     'Invoices',
     'Invoices',
-    // VOIDED must be excluded too: a voided bill still passes a DELETED-only
-    // filter and would wrongly move fund balances in the mirror.
-    { where: 'Status!="DELETED"&&Status!="VOIDED"' },
+    {},
     modifiedSince,
   )
   if (!invoices.length) return 0
   const classByCode = await loadAccountClasses(svc)
   const rows: TransactionRow[] = []
   for (const inv of invoices) {
+    if (isDeadDocument(inv.Status)) continue
     // A sales invoice brings money in, a bill sends it out; the account's
     // class then decides the stored sign (see lineSign).
     const direction: MoneyDirection = inv.Type === 'ACCPAY' ? -1 : 1
@@ -700,6 +754,14 @@ async function syncInvoices(
       }),
     )
   }
+  // Clear every fetched document's lines, then write back the live ones. This
+  // is what makes a void take effect, and it also stops an edited invoice that
+  // lost a line from leaving the old line behind.
+  await clearDocumentRows(
+    svc,
+    ['ACCPAY', 'ACCREC'],
+    invoices.map((inv) => inv.InvoiceID),
+  )
   if (!rows.length) return 0
   return upsertBatches(
     svc,
@@ -740,21 +802,26 @@ async function syncBankTransactions(
   errors: string[],
   modifiedSince?: string,
 ): Promise<number> {
+  // No status filter — see isDeadDocument: a deleted or voided transaction has
+  // to arrive for its mirrored lines to be removed.
   const transactions = await fetchAllPages<XeroBankTransactionApi>(
     'BankTransactions',
     'BankTransactions',
-    { where: 'Status!="DELETED"' },
+    {},
     modifiedSince,
   )
   if (!transactions.length) return 0
   const classByCode = await loadAccountClasses(svc)
   const rows: TransactionRow[] = []
+  const bankSourceTypes = new Set<string>()
   for (const tx of transactions) {
     const mapped = mapBankTransactionType(tx.Type)
     if (!mapped) {
       errors.push(`Skipped bank transaction ${tx.BankTransactionID} — unknown type ${tx.Type}`)
       continue
     }
+    bankSourceTypes.add(mapped.source)
+    if (isDeadDocument(tx.Status)) continue
     rows.push(
       ...flattenDocument({
         docId: tx.BankTransactionID,
@@ -768,6 +835,11 @@ async function syncBankTransactions(
       }),
     )
   }
+  await clearDocumentRows(
+    svc,
+    [...bankSourceTypes],
+    transactions.map((tx) => tx.BankTransactionID),
+  )
   if (!rows.length) return 0
   return upsertBatches(
     svc,
@@ -783,16 +855,18 @@ async function syncCreditNotes(
   errors: string[],
   modifiedSince?: string,
 ): Promise<number> {
+  // No status filter — see isDeadDocument.
   const creditNotes = await fetchAllPages<XeroCreditNoteApi>(
     'CreditNotes',
     'CreditNotes',
-    { where: 'Status!="DELETED"&&Status!="VOIDED"' },
+    {},
     modifiedSince,
   )
   if (!creditNotes.length) return 0
   const classByCode = await loadAccountClasses(svc)
   const rows: TransactionRow[] = []
   for (const cn of creditNotes) {
+    if (isDeadDocument(cn.Status)) continue
     // A credit note runs the opposite way to the document it credits: a sales
     // credit gives money back (reducing income), a supplier credit takes it
     // back (reducing expenditure). Direction plus account class gives the
@@ -811,6 +885,11 @@ async function syncCreditNotes(
       }),
     )
   }
+  await clearDocumentRows(
+    svc,
+    ['CREDIT_NOTE'],
+    creditNotes.map((cn) => cn.CreditNoteID),
+  )
   if (!rows.length) return 0
   return upsertBatches(
     svc,
