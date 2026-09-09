@@ -15,6 +15,7 @@ const DashboardPage = lazy(() => import('@/modules/dashboard/DashboardPage'))
 const FundsPage = lazy(() => import('@/modules/funds/FundsPage'))
 const FundDetailPage = lazy(() => import('@/modules/funds/FundDetailPage'))
 const IntegrityPage = lazy(() => import('@/modules/funds/IntegrityPage'))
+const ReconciliationPage = lazy(() => import('@/modules/recon/ReconciliationPage'))
 const ReportsPage = lazy(() => import('@/modules/reports/ReportsPage'))
 const ExpensesPage = lazy(() => import('@/modules/expenses/ExpensesPage'))
 const ClaimDetailPage = lazy(() => import('@/modules/expenses/ClaimDetailPage'))
@@ -80,6 +81,7 @@ export default function App() {
               <Route index element={<Page><DashboardPage /></Page>} />
               <Route path="funds" element={<Page><FundsPage /></Page>} />
               <Route path="funds/integrity" element={<Page><IntegrityPage /></Page>} />
+              <Route path="reconciliation" element={<Page><ReconciliationPage /></Page>} />
               <Route path="funds/:id" element={<Page><FundDetailPage /></Page>} />
               <Route path="reports/*" element={<Page><ReportsPage /></Page>} />
               <Route path="financials" element={<Navigate to="/financials/profit-loss" replace />} />
