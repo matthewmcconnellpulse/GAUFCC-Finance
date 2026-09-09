@@ -8,9 +8,13 @@
  *   custom connection — it is not in the default set, so when it is missing
  *   this says exactly that instead of showing an empty dropdown.
  * - The annual operating budget, the denominator of reserve coverage. It is
- *   typed here rather than derived, because a coverage ratio on a guessed
- *   denominator is worse than no ratio at all. Once the Xero budget carries a
- *   full year of expenditure this can be read from it instead.
+ *   typed here as a fallback: once the tracked Xero budget carries a full year
+ *   of expenditure the pack derives the denominator from that instead. Either
+ *   way it is never guessed — with neither, coverage reports as unavailable.
+ *
+ * Writable by pulse_admin only, which is what the settings guard in the
+ * database allows; the CEO's exception covers the two payment-cycle keys and
+ * nothing else.
  */
 import { useEffect, useState } from 'react'
 import { usePermissions } from '@/auth/AuthProvider'
@@ -31,8 +35,12 @@ import { updateSettingValue } from './lib'
 import { SectionCard } from './components'
 
 export default function BudgetSection() {
-  const { isAdmin, isCeo } = usePermissions()
-  const canEdit = isAdmin || isCeo
+  const { isAdmin } = usePermissions()
+  // app_private.guard_settings_write() lets only pulse_admin write settings —
+  // the CEO's exception is scoped to the two payment-cycle keys. Offering the
+  // form more widely than that would fail at the database, so the UI matches
+  // the rule rather than discovering it on save.
+  const canEdit = isAdmin
 
   const settings = useSupabaseQuery(fetchManagementSettings, [])
   const budgets = useSupabaseQuery(fetchBudgetList, [])
@@ -175,7 +183,9 @@ export default function BudgetSection() {
             {saving ? 'Saving…' : 'Save budget settings'}
           </Button>
         ) : (
-          <p className="text-[11px] text-stone-500">Only a Pulse admin or the CEO can change these.</p>
+          <p className="text-[11px] text-stone-500">
+            Only a Pulse admin can change these — ask us and we will set them for you.
+          </p>
         )}
       </div>
     </SectionCard>
