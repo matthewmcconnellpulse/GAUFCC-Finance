@@ -489,6 +489,14 @@ export const SETTING_KEYS = {
   syncHour: 'sync_hour', // default 4 (Europe/London)
   warningDefaults: 'warning_defaults',
   mileageRatePence: 'mileage_rate_pence', // default 45 (HMRC approved rate)
+  // Reserve coverage denominator. Set from the Xero budget when one is
+  // available; typed in Settings until then, because a coverage ratio with a
+  // guessed denominator is worse than no ratio at all.
+  annualOperatingBudget: 'annual_operating_budget',
+  /** Xero BudgetID to track against — chosen in Settings from the live list. */
+  xeroBudgetId: 'xero_budget_id',
+  /** Xero BudgetID for the prior year's comparative column. */
+  xeroPriorBudgetId: 'xero_prior_budget_id',
 } as const
 
 export interface UserActivityRow {
