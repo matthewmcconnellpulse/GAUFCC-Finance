@@ -63,6 +63,8 @@ export interface WholeBusinessPl {
   unallocatedExpenditure: number
   unallocatedNet: number
   lineCount: number
+  /** Whole-charity income and expenditure by month, oldest first. */
+  months: PlMonth[]
   /** True if the mirror hit the pagination cap — figures would be short. */
   truncated: boolean
 }
@@ -75,7 +77,16 @@ const CAP = 40000
 interface PlLine {
   account_code: string | null
   net: number
+  date: string
   tracking_option_1_id: string | null
+}
+
+export interface PlMonth {
+  /** 'YYYY-MM' */
+  month: string
+  income: number
+  expenditure: number
+  net: number
 }
 
 /**
@@ -118,7 +129,7 @@ export async function fetchWholeBusinessPl(period: {
   for (let offset = 0; offset < CAP; offset += CHUNK) {
     const { data, error } = await supabase
       .from('xero_transactions')
-      .select('account_code, net, tracking_option_1_id')
+      .select('account_code, net, date, tracking_option_1_id')
       .in('account_code', plCodes)
       .gte('date', period.start)
       .lte('date', period.end)
@@ -133,6 +144,7 @@ export async function fetchWholeBusinessPl(period: {
   }
 
   const byCode = new Map<string, PlAccountRow>()
+  const byMonth = new Map<string, { income: number; expenditure: number }>()
   for (const line of lines) {
     const code = line.account_code
     if (!code) continue
@@ -145,7 +157,22 @@ export async function fetchWholeBusinessPl(period: {
     }
     row.amount += line.net
     if (!line.tracking_option_1_id) row.unallocated += line.net
+
+    const month = line.date.slice(0, 7)
+    const bucket = byMonth.get(month) ?? { income: 0, expenditure: 0 }
+    if (account.class === 'REVENUE') bucket.income += line.net
+    else bucket.expenditure += line.net
+    byMonth.set(month, bucket)
   }
+
+  const months: PlMonth[] = [...byMonth.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, b]) => ({
+      month,
+      income: round2(b.income),
+      expenditure: round2(b.expenditure),
+      net: round2(b.income - b.expenditure),
+    }))
 
   const group = (
     keys: Array<SorpCategory | 'unmapped'>,
@@ -191,6 +218,7 @@ export async function fetchWholeBusinessPl(period: {
     unallocatedExpenditure,
     unallocatedNet: round2(unallocatedIncome - unallocatedExpenditure),
     lineCount: lines.length,
+    months,
     truncated,
   }
 }
@@ -206,6 +234,7 @@ function emptyPl(): WholeBusinessPl {
     unallocatedExpenditure: 0,
     unallocatedNet: 0,
     lineCount: 0,
+    months: [],
     truncated: false,
   }
 }

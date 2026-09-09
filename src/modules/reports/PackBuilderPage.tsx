@@ -716,7 +716,7 @@ export default function PackBuilderPage({
             <li>Cover — {PACK_CONCEPTS.find((c) => c.value === concept)?.label}, contents, executive summary</li>
             <li>
               Whole-charity management reports — income and expenditure, balance sheet, debtors, creditors,
-              budget, cash flow forecast, reserves and coverage
+              budget, cash flow forecast, reserves and coverage, and the period in charts
             </li>
             <li>Charity-level financials — movements by fund, waterfall and reserves split</li>
             <li>Top ten movements in funds — largest net movers, ranked</li>

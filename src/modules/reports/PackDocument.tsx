@@ -35,6 +35,7 @@ import {
 import {
   AgedPage,
   BudgetPage,
+  ChartsPage,
   ForecastPage,
   ManagementBalanceSheetPage,
   ManagementPlPage,
@@ -188,6 +189,8 @@ export default function PackDocument(props: PackInputs) {
   page += 1
   const reservesPage = page
   page += 1
+  const chartsPage = page
+  page += 1
   const sofaStart = page
   page += sofaPages.length
   const movementPage = page
@@ -210,6 +213,7 @@ export default function PackDocument(props: PackInputs) {
     { title: 'Against budget', sub: 'This year and last year’s budget', page: budgetPage },
     { title: 'Cash flow forecast', sub: 'From the current week forward', page: forecastPage },
     { title: 'Reserves and coverage', sub: 'Free reserves against annual operating cost', page: reservesPage },
+    { title: 'The period in charts', sub: 'Monthly movement, fund split, ageing', page: chartsPage },
     { title: 'Movements by fund', sub: 'SOFA-style income and expenditure', page: sofaStart },
     { title: 'Where the period moved', sub: 'Balance waterfall and reserves split', page: movementPage },
     { title: 'Top ten movements in funds', sub: 'Largest net movements, whichever direction', page: topMovementPage },
@@ -273,6 +277,13 @@ export default function PackDocument(props: PackInputs) {
         totals={props.model.totals}
         pageNum={reservesPage}
         footer={footer(reservesPage)}
+      />
+      <ChartsPage
+        data={props.management}
+        model={props.model}
+        periodLabel={props.periodLabel}
+        pageNum={chartsPage}
+        footer={footer(chartsPage)}
       />
 
       {sofaPages.map((entries, i) => (

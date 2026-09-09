@@ -18,8 +18,8 @@
  */
 import type { ReactNode } from 'react'
 import { formatDate } from '@/lib/format'
-import { BalanceWaterfall } from './charts'
-import { compactMoney, sofaFigure, type Period } from './lib'
+import { AgeBars, BalanceWaterfall, IncomeExpenditureLegend, MonthlyBars, SplitBar } from './charts'
+import { compactMoney, monthShort, sofaFigure, type Period, type ReportModel } from './lib'
 import type {
   AgedAnalysis,
   AgedBucketKey,
@@ -763,6 +763,122 @@ export function ForecastPage({
           </div>
         </>
       )}
+      {footer}
+    </div>
+  )
+}
+
+// ── Charts ──────────────────────────────────────────────────────────────────
+
+/**
+ * The charts worth a page: how income and expenditure ran month by month,
+ * how the funds split between restricted and unrestricted, and the shape of
+ * the debtor and creditor books by age.
+ *
+ * Debtors and creditors get a chart each rather than sharing one with two
+ * scales, and there is no gross profit margin, debtor-days or creditor-days
+ * ratio anywhere — balances by age are what a chase or a payment run gets
+ * decided on.
+ */
+export function ChartsPage({
+  data,
+  model,
+  periodLabel,
+  pageNum,
+  footer,
+}: {
+  data: ManagementData
+  model: ReportModel
+  periodLabel: string
+  pageNum: number
+  footer: ReactNode
+}) {
+  const months = data.pl?.months ?? []
+  const bars = months.map((m) => ({
+    label: monthShort(m.month).toUpperCase(),
+    income: m.income,
+    expenditure: m.expenditure,
+  }))
+  const aged = data.aged
+  const bucketData = (side: 'receivables' | 'payables') =>
+    (aged?.buckets ?? []).map((b) => ({
+      label: b.label.replace(' days', 'd').replace('Over 90d', '90d+'),
+      value: aged ? (aged[side].buckets[b.key as AgedBucketKey] ?? 0) : 0,
+    }))
+
+  const best = months.reduce<{ month: string; net: number } | null>(
+    (acc, m) => (acc === null || m.net > acc.net ? { month: m.month, net: m.net } : acc),
+    null,
+  )
+  const worst = months.reduce<{ month: string; net: number } | null>(
+    (acc, m) => (acc === null || m.net < acc.net ? { month: m.month, net: m.net } : acc),
+    null,
+  )
+
+  return (
+    <div className="pk-page">
+      <PageHead title="The period in charts" kicker={`Whole charity · ${periodLabel}`} pageNum={pageNum} />
+
+      <div style={{ marginTop: 18 }}>
+        <div className="pk-kicker" style={{ marginBottom: 10 }}>
+          Income and expenditure by month
+        </div>
+        {bars.length === 0 ? (
+          <div className="pk-footnote">
+            No monthly movement to chart — the ledger holds no income or expenditure in this period.
+          </div>
+        ) : (
+          <>
+            <MonthlyBars data={bars} width={660} responsive={false} />
+            <IncomeExpenditureLegend />
+            {best && worst && best.month !== worst.month ? (
+              <div className="pk-footnote">
+                The strongest month was {monthShort(best.month)} at {sofaFigure(best.net)} net;{' '}
+                {monthShort(worst.month)} was the weakest at {sofaFigure(worst.net)}.
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+
+      <div style={{ marginTop: 26 }}>
+        <div className="pk-kicker" style={{ marginBottom: 10 }}>
+          Closing funds — restricted vs unrestricted
+        </div>
+        <SplitBar restricted={model.split.restricted} unrestricted={model.split.unrestricted} />
+      </div>
+
+      <div style={{ marginTop: 26, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 26 }}>
+        <div>
+          <div className="pk-kicker" style={{ marginBottom: 8 }}>
+            Debtors by age
+          </div>
+          {aged && aged.receivables.invoice_count > 0 ? (
+            <AgeBars data={bucketData('receivables')} tone="indigo" width={300} responsive={false} />
+          ) : (
+            <div className="pk-footnote">
+              {aged ? 'Nothing outstanding.' : 'Not available — Xero could not be read.'}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="pk-kicker" style={{ marginBottom: 8 }}>
+            Creditors by age
+          </div>
+          {aged && aged.payables.invoice_count > 0 ? (
+            <AgeBars data={bucketData('payables')} tone="crimson" width={300} responsive={false} />
+          ) : (
+            <div className="pk-footnote">
+              {aged ? 'Nothing outstanding.' : 'Not available — Xero could not be read.'}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="pk-footnote" style={{ maxWidth: 560, marginTop: 'auto' }}>
+        Monthly figures are the whole charity across all funds, on the same ledger the income and expenditure
+        page is drawn from. Ageing buckets are days past the invoice due date.
+      </div>
       {footer}
     </div>
   )
