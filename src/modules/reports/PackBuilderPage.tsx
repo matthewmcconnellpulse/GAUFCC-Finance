@@ -33,12 +33,14 @@ import { invokeFunction, supabase } from '@/lib/supabase'
 import { formatMoney } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import { CommentaryEditor } from './CommentaryEditor'
+import { FundNoteEditor } from './FundNoteEditor'
 import { PeriodControls, Segmented } from './components'
 import PackDocument, {
   EMPTY_COMMENTARY,
   PACK_CONCEPTS,
   type PackCommentary,
   type PackConcept,
+  type PackFundNotes,
   type PackInputs,
 } from './PackDocument'
 import { buildPackHtml, PACK_CSS } from './packCss'
@@ -80,6 +82,7 @@ export default function PackBuilderPage({
   const [concept, setConcept] = useState<PackConcept>('ledger')
   const [extraFundIds, setExtraFundIds] = useState<string[]>([])
   const [commentary, setCommentary] = useState<PackCommentary>(EMPTY_COMMENTARY)
+  const [fundNotes, setFundNotes] = useState<PackFundNotes>({})
   const [previewOpen, setPreviewOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -145,6 +148,11 @@ export default function PackBuilderPage({
   }, [model, flaggedFunds, extraFundIds])
 
 
+  const notedFundCount = useMemo(
+    () => fundPages.filter((f) => (fundNotes[f.fund_id]?.text ?? '').trim()).length,
+    [fundPages, fundNotes],
+  )
+
   const packInputs: PackInputs | null =
     model && sources.data
       ? {
@@ -162,6 +170,7 @@ export default function PackBuilderPage({
           settings: settings.data ?? DEFAULT_SETTINGS,
           preparedBy: profile?.full_name ?? 'Pulse Accountants',
           commentary,
+          fundNotes,
         }
       : null
 
@@ -178,7 +187,14 @@ export default function PackBuilderPage({
         period_end: state.period.end,
         scope: state.scope,
         html,
-        commentary,
+        commentary: {
+          sections: commentary,
+          funds: Object.fromEntries(
+            fundPages
+              .filter((f) => (fundNotes[f.fund_id]?.text ?? '').trim())
+              .map((f) => [f.fund_id, { name: f.name, ...fundNotes[f.fund_id] }]),
+          ),
+        },
       }
       if (state.scope !== 'whole_charity') body.scope_fund_ids = model.scopedFundIds
       const res = await invokeFunction<GeneratePackResponse>('generate-pack', body)
@@ -351,6 +367,46 @@ export default function PackBuilderPage({
           </p>
         </Card>
 
+        {/* Per-fund notes — one per fund page in the pack */}
+        <Card className="px-5 py-4">
+          <SectionLabel>Notes on individual funds</SectionLabel>
+          <p className="text-[12px] text-stone-500 mb-3">
+            A note against a fund prints on that fund's page. Type it yourself; AI will polish your wording if you
+            ask, but it never drafts a note from the figures. Funds with no note simply omit it.
+          </p>
+          {fundPages.length === 0 ? (
+            <p className="text-[12px] text-stone-500">
+              No per-fund pages are in the pack yet — add a fund above and a note box appears for it here.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {fundPages.map((f) => (
+                <FundNoteEditor
+                  key={f.fund_id}
+                  fund={f}
+                  state={fundNotes[f.fund_id] ?? { text: '', source: 'human' }}
+                  onChange={(next) => setFundNotes((n) => ({ ...n, [f.fund_id]: next }))}
+                  context={{
+                    fund: f.name,
+                    fund_type: f.fund_type,
+                    period: label,
+                    opening: f.opening,
+                    income: f.income,
+                    expenditure: f.expenditure,
+                    net: f.net,
+                    closing: f.closing,
+                    purpose: f.purpose,
+                    flagged: f.flagged,
+                    warnings: (sources.data?.warnings ?? [])
+                      .filter((w) => w.fund_id === f.fund_id)
+                      .map((w) => w.message),
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </Card>
+
         {/* Commentary — written by the preparer, reviewed before issue */}
         <Card className="px-5 py-4">
           <SectionLabel>Commentary</SectionLabel>
@@ -391,9 +447,11 @@ export default function PackBuilderPage({
           <ul className="text-[12.5px] text-stone-700 space-y-1.5">
             <li>Cover — {PACK_CONCEPTS.find((c) => c.value === concept)?.label}, contents, executive summary</li>
             <li>Charity-level financials — movements by fund, waterfall and reserves split</li>
+            <li>Top ten movements in funds — largest net movers, ranked</li>
             <li>
               {fundPages.length} per-fund page{fundPages.length === 1 ? '' : 's'}
               {flaggedFunds.length > 0 ? ` (${flaggedFunds.length} flagged, auto-included)` : ''}
+              {notedFundCount > 0 ? ` · ${notedFundCount} carrying a note` : ''}
             </li>
             <li>
               Data integrity —{' '}

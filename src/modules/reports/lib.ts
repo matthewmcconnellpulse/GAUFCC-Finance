@@ -637,6 +637,45 @@ function sum<T>(items: T[], pick: (t: T) => number): number {
   return items.reduce((s, t) => s + pick(t), 0)
 }
 
+// ── Top movements by fund ────────────────────────────────────────────────────
+
+export interface TopFundMovement extends ReportFundRow {
+  /** Net movement as a share of the opening balance, null where opening is nil. */
+  pctOfOpening: number | null
+}
+
+export interface TopFundMovements {
+  rows: TopFundMovement[]
+  /** Funds outside the top N, so the page still reconciles to the grand total. */
+  restCount: number
+  restNet: number
+  totalNet: number
+}
+
+/**
+ * The funds that actually moved, largest first by absolute net movement.
+ *
+ * Ranked on |net| rather than net so a large outflow is as visible as a large
+ * inflow — a fund £70k down is exactly what trustees need on the page. Funds
+ * with no movement are excluded entirely (they carry forward unchanged and are
+ * already listed in the SOFA pages).
+ */
+export function topFundMovements(model: ReportModel, limit = 10): TopFundMovements {
+  const moved = model.rows.filter((r) => Math.round(r.net * 100) !== 0)
+  const ranked = [...moved].sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+  const top = ranked.slice(0, limit)
+  const rest = ranked.slice(limit)
+  return {
+    rows: top.map((r) => ({
+      ...r,
+      pctOfOpening: Math.abs(r.opening) < 1 ? null : (r.net / Math.abs(r.opening)) * 100,
+    })),
+    restCount: rest.length,
+    restNet: sum(rest, (r) => r.net),
+    totalNet: model.totals.net,
+  }
+}
+
 /** Candidate tracking ids for a set of funds (transaction scoping). */
 export function trackingIdsForFunds(tracking: TrackingIndex, fundIds: string[]): string[] {
   const ids: string[] = []

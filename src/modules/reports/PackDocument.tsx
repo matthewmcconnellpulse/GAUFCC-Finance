@@ -18,6 +18,7 @@ import {
   sofaFigure,
   trailingMonthKeys,
   balanceSeries,
+  topFundMovements,
   FUND_TYPE_LABELS,
   type MonthlyIndex,
   type MovementRow,
@@ -59,6 +60,15 @@ export const EMPTY_COMMENTARY: PackCommentary = {
   reserves: { text: '', source: 'human' },
 }
 
+/**
+ * Trustee-facing note against one fund, keyed by fund id. Typed by the
+ * preparer; AI may be asked to polish what they typed (never to write it from
+ * nothing), so `source` records which happened for the builder's benefit. The
+ * printed page carries the note plainly either way — by the time a pack is
+ * issued a human has read and accepted every word of it.
+ */
+export type PackFundNotes = Record<string, CommentaryState>
+
 export interface PackInputs {
   title: string
   concept: PackConcept
@@ -74,6 +84,7 @@ export interface PackInputs {
   settings: SettingsSnapshot
   preparedBy: string
   commentary: PackCommentary
+  fundNotes: PackFundNotes
 }
 
 // ── Formatting helpers (SOFA conventions: whole £, expenditure in brackets) ──
@@ -149,6 +160,8 @@ export default function PackDocument(props: PackInputs) {
   page += sofaPages.length
   const movementPage = page
   page += 1
+  const topMovementPage = page
+  page += 1
   const fundStart = page
   page += props.fundPages.length
   const integrityPage = page
@@ -160,6 +173,7 @@ export default function PackDocument(props: PackInputs) {
     { title: 'Executive summary', sub: 'The period in brief, with commentary', page: execPage },
     { title: 'Movements by fund', sub: 'SOFA-style income and expenditure', page: sofaStart },
     { title: 'Where the period moved', sub: 'Balance waterfall and reserves split', page: movementPage },
+    { title: 'Top ten movements in funds', sub: 'Largest net movements, whichever direction', page: topMovementPage },
     ...props.fundPages.map((f, i) => ({
       title: f.name,
       sub: `${FUND_TYPE_LABELS[f.fund_type]} fund${f.flagged ? ' · flagged this period' : ''}`,
@@ -191,6 +205,7 @@ export default function PackDocument(props: PackInputs) {
         />
       ))}
       <MovementPage {...props} pageNum={movementPage} footer={footer(movementPage)} />
+      <TopMovementsPage {...props} pageNum={topMovementPage} footer={footer(topMovementPage)} />
       {props.fundPages.map((f, i) => (
         <FundPage
           key={f.fund_id}
@@ -556,6 +571,102 @@ function MovementPage({
   )
 }
 
+// ── Top ten movements by fund ────────────────────────────────────────────────
+
+/**
+ * The ten funds that moved most this period. Ranked on the absolute net
+ * movement so a fund that spent heavily is as prominent as one that took money
+ * in — which is the point of the page: it is where the trustees' attention goes
+ * first, ahead of the fund-by-fund detail.
+ */
+function TopMovementsPage({
+  pageNum,
+  footer,
+  ...props
+}: PackInputs & { pageNum: number; footer: ReactNode }) {
+  const top = topFundMovements(props.model, 10)
+  return (
+    <div className="pk-page">
+      <div className="pk-head">
+        <div className="pk-h1">Top ten movements in funds</div>
+        <div className="pk-pagenum">{String(pageNum).padStart(2, '0')}</div>
+      </div>
+      <div className="pk-lede" style={{ marginTop: 14, maxWidth: 560 }}>
+        {top.rows.length === 0
+          ? `No fund moved over ${props.periodLabel}.`
+          : `The ${top.rows.length} fund${top.rows.length === 1 ? '' : 's'} with the largest net movement over ${props.periodLabel}, ranked by size of movement regardless of direction.`}
+      </div>
+      <table className="pk-table" style={{ marginTop: 20 }}>
+        <thead>
+          <tr>
+            <th style={{ width: 26 }} className="pk-num">#</th>
+            <th>Fund</th>
+            <th className="pk-num">Opening</th>
+            <th className="pk-num">Income</th>
+            <th className="pk-num">Expenditure</th>
+            <th className="pk-num">Net</th>
+            <th className="pk-num">Closing</th>
+            <th className="pk-num">On opening</th>
+          </tr>
+        </thead>
+        <tbody>
+          {top.rows.map((r, i) => (
+            <tr key={r.fund_id}>
+              <td className="pk-num pk-muted">{i + 1}</td>
+              <td>
+                {r.name}
+                {r.flagged ? <span style={{ color: '#b86e02' }} title="Flagged this period"> ⚑</span> : null}
+                <span className="pk-chip" style={{ ...CHIP_STYLES[r.fund_type], marginLeft: 8, fontSize: 8.5, padding: '2px 7px', verticalAlign: 1 }}>
+                  {FUND_TYPE_LABELS[r.fund_type]}
+                </span>
+              </td>
+              <td className="pk-num">{fig(r.opening)}</td>
+              <td className="pk-num">{fig(r.income)}</td>
+              <td className="pk-num">{expFig(r.expenditure)}</td>
+              <td className="pk-num pk-strong" style={{ color: r.net >= 0 ? '#036c57' : '#0d0a26' }}>{fig(r.net)}</td>
+              <td className="pk-num">{fig(r.closing)}</td>
+              <td className="pk-num pk-muted">
+                {r.pctOfOpening === null ? '—' : `${r.pctOfOpening >= 0 ? '+' : '−'}${Math.abs(Math.round(r.pctOfOpening))}%`}
+              </td>
+            </tr>
+          ))}
+          {top.restCount > 0 ? (
+            <tr className="pk-subtotal">
+              <td className="pk-num pk-muted"></td>
+              <td>
+                {top.restCount} further fund{top.restCount === 1 ? '' : 's'} with movement in the period
+              </td>
+              <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+              <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+              <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+              <td className="pk-num">{fig(top.restNet)}</td>
+              <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+              <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+            </tr>
+          ) : null}
+          <tr className="pk-grand">
+            <td className="pk-num"></td>
+            <td>Net movement, all funds</td>
+            <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+            <td className="pk-num">{fig(props.model.totals.income)}</td>
+            <td className="pk-num">{expFig(props.model.totals.expenditure)}</td>
+            <td className="pk-num">{fig(top.totalNet)}</td>
+            <td className="pk-num">{fig(props.model.totals.closing)}</td>
+            <td className="pk-num"></td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="pk-footnote" style={{ maxWidth: 560 }}>
+        Funds with no movement in the period are excluded from this ranking; they carry forward unchanged and
+        appear in full on the movements pages. &quot;On opening&quot; is the net movement as a share of the fund&apos;s
+        opening balance, and is shown as — where the fund opened at nil. The ranked rows and the further funds
+        together reconcile to the net movement on all funds.
+      </div>
+      {footer}
+    </div>
+  )
+}
+
 // ── Per-fund pages ───────────────────────────────────────────────────────────
 
 function FundPage({
@@ -581,6 +692,7 @@ function FundPage({
   const chip = CHIP_STYLES[fund.fund_type]
   const lo = Math.min(...series)
   const hi = Math.max(...series)
+  const note = inputs.fundNotes[fund.fund_id]?.text.trim() ?? ''
 
   return (
     <div className="pk-page">
@@ -648,6 +760,11 @@ function FundPage({
           <div className="pk-note">
             <b style={{ color: '#8a5200' }}>Flagged this period</b> —{' '}
             {fundWarnings.map((w) => w.message).join('; ')}
+          </div>
+        ) : null}
+        {note ? (
+          <div className="pk-note" style={{ borderLeft: '2px solid #211951' }}>
+            <b style={{ color: '#211951' }}>Note on this fund</b> — {note}
           </div>
         ) : null}
       </div>
