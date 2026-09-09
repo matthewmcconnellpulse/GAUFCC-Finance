@@ -252,7 +252,14 @@ export default function PackBuilderPage({
     [managementSettings.data?.xeroBudgetId, state.period.end],
   )
 
-  const forecast = useSupabaseQuery(() => fetchPackForecast({ weeks: 13, months: 3 }), [])
+  // The cashflow tables are Pulse/CEO only. RLS returns empty rather than an
+  // error for anyone else, which would read as "no forecast has been set up"
+  // — so the distinction is drawn here instead of misreported on the page.
+  const canSeeCashflow = isPulse || isCeo
+  const forecast = useSupabaseQuery(
+    () => (canSeeCashflow ? fetchPackForecast({ weeks: 13, months: 3 }) : Promise.resolve(null)),
+    [canSeeCashflow],
+  )
 
   const management = useMemo<ManagementData>(() => {
     const pl = managementPl.data ?? null
@@ -302,7 +309,11 @@ export default function PackBuilderPage({
           })
         : null,
       forecast: forecast.data ?? null,
-      forecastError: forecast.error ?? null,
+      forecastError:
+        forecast.error ??
+        (!canSeeCashflow
+          ? 'the cash flow forecast is not visible to your role. Ask Pulse or the CEO to assemble the pack so it is included.'
+          : null),
     }
   }, [
     managementPl.data,
@@ -317,6 +328,7 @@ export default function PackBuilderPage({
     annualFromXero.data,
     forecast.data,
     forecast.error,
+    canSeeCashflow,
     model,
   ])
 
@@ -613,7 +625,13 @@ export default function PackBuilderPage({
                   ? `Closing ${formatMoney(management.forecast.closingBalance)}${management.forecast.goesNegativeAt ? ` · goes negative at ${management.forecast.goesNegativeAt}` : ''}`
                   : null
               }
-              pendingDetail={!management.forecast ? 'The cash flow forecast has not been set up yet' : null}
+              pendingDetail={
+                !canSeeCashflow
+                  ? 'Not visible to your role — Pulse or the CEO must assemble this pack'
+                  : !management.forecast
+                    ? 'The cash flow forecast has not been set up yet'
+                    : null
+              }
             />
             <SourceRow
               label="Reserve coverage"
