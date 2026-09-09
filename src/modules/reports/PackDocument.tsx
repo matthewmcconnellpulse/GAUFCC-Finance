@@ -43,7 +43,11 @@ export type CommentarySectionKey = 'executive_summary' | 'financials' | 'reserve
 
 export interface CommentaryState {
   text: string
-  /** ai = untouched AI draft · ai_edited = AI draft reviewed/edited by a human · human = written by hand */
+  /**
+   * Always 'human' now — commentary is written by the accountant preparing
+   * the pack. The older values are kept in the type only so packs saved
+   * before AI drafting was removed still parse.
+   */
   source: 'ai' | 'ai_edited' | 'human'
 }
 
@@ -324,23 +328,6 @@ function ContentsPage({ toc, footer }: { toc: TocEntry[]; footer: ReactNode }) {
 
 // ── Executive summary ────────────────────────────────────────────────────────
 
-function AiAttribution({ state, preparedBy }: { state: CommentaryState; preparedBy: string }) {
-  if (!state.text || state.source === 'human') return null
-  const draft = state.source === 'ai'
-  return (
-    <div className={draft ? 'pk-ai-attrib pk-ai-attrib--draft' : 'pk-ai-attrib'}>
-      <svg width="11" height="11" viewBox="0 0 24 24" fill={draft ? '#8a5200' : '#211951'} aria-hidden>
-        <path d="M12 2.5l2.1 6.6 6.9 2.3-6.9 2.3-2.1 6.6-2.1-6.6-6.9-2.3 6.9-2.3z" />
-      </svg>
-      <span>
-        {draft
-          ? 'AI draft — not yet reviewed. Review before this pack is issued.'
-          : `Drafted with AI from the ledger · reviewed and edited by ${preparedBy}`}
-      </span>
-    </div>
-  )
-}
-
 function ExecutiveSummaryPage({
   pageNum,
   footer,
@@ -388,7 +375,6 @@ function ExecutiveSummaryPage({
           {props.commentary.executive_summary.text ? (
             <>
               <div className="pk-body">{props.commentary.executive_summary.text}</div>
-              <AiAttribution state={props.commentary.executive_summary} preparedBy={props.preparedBy} />
             </>
           ) : (
             <div className="pk-lede">
@@ -553,7 +539,6 @@ function MovementPage({
       {props.commentary.reserves.text ? (
         <div style={{ marginTop: 24 }}>
           <div className="pk-body">{props.commentary.reserves.text}</div>
-          <AiAttribution state={props.commentary.reserves} preparedBy={props.preparedBy} />
         </div>
       ) : (
         <div className="pk-footnote" style={{ maxWidth: 540 }}>
@@ -564,7 +549,6 @@ function MovementPage({
       {props.commentary.financials.text ? (
         <div className="pk-note" style={{ marginTop: 'auto' }}>
           <b style={{ color: '#211951' }}>Note on the figures</b> — {props.commentary.financials.text}
-          <AiAttribution state={props.commentary.financials} preparedBy={props.preparedBy} />
         </div>
       ) : null}
       {footer}
@@ -812,8 +796,8 @@ function AppendixPage({
       </div>
       <div className="pk-footnote" style={{ marginTop: 24 }}>
         This pack was assembled on the GAUFCC Finance Platform by Pulse Accountants &amp; Tax Advisors Limited.
-        Figures are unaudited and drawn from the live Xero ledger. AI-assisted commentary, where present, is
-        labelled and was reviewed by a named member of staff before issue.
+        Figures are unaudited and drawn from the live Xero ledger. The commentary was written and reviewed by
+        a named member of staff before issue.
       </div>
       {footer}
     </div>

@@ -29,14 +29,14 @@ import {
   StatusChip,
   cx,
 } from '@/components/ui'
-import { invokeFunction } from '@/lib/supabase'
+import { invokeFunction, supabase } from '@/lib/supabase'
+import { formatMoney } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import { CommentaryEditor } from './CommentaryEditor'
 import { PeriodControls, Segmented } from './components'
 import PackDocument, {
   EMPTY_COMMENTARY,
   PACK_CONCEPTS,
-  type CommentarySectionKey,
   type PackCommentary,
   type PackConcept,
   type PackInputs,
@@ -75,7 +75,6 @@ export default function PackBuilderPage({
 }) {
   const { profile } = useAuth()
   const { isPulse, isCeo, isAdmin } = usePermissions()
-  const canUseAi = isPulse || isCeo
 
   const [title, setTitle] = useState('Board finance pack')
   const [concept, setConcept] = useState<PackConcept>('ledger')
@@ -102,6 +101,19 @@ export default function PackBuilderPage({
     () => (sources.data ? buildMonthlyIndex(sources.data.monthly) : new Map()),
     [sources.data],
   )
+
+  // A fund that exists only as a balance-sheet capital account has no fund
+  // record, so nothing in this pack can include it. Say so here rather than
+  // let a pack go to trustees quietly short of a fund.
+  const coverage = useSupabaseQuery(async () => {
+    const { data, error } = await supabase
+      .from('v_integrity_fund_coverage')
+      .select('account_name, ledger_amount, issue')
+      .eq('issue', 'no_fund_in_register')
+      .order('ledger_amount', { ascending: false, nullsFirst: false })
+    if (error) throw new Error(error.message)
+    return (data ?? []) as Array<{ account_name: string; ledger_amount: number | null }>
+  }, [])
 
   const movements = useSupabaseQuery<MovementRow[] | null>(async () => {
     if (!sources.data || !model) return null
@@ -132,9 +144,6 @@ export default function PackBuilderPage({
     return [...flaggedFunds, ...extras]
   }, [model, flaggedFunds, extraFundIds])
 
-  const unreviewedAi = (Object.keys(commentary) as CommentarySectionKey[]).some(
-    (k) => commentary[k].source === 'ai' && commentary[k].text.trim().length > 0,
-  )
 
   const packInputs: PackInputs | null =
     model && sources.data
@@ -181,31 +190,6 @@ export default function PackBuilderPage({
     }
   }
 
-  const commentaryContext = useMemo(() => {
-    if (!model) return {}
-    return {
-      period: label,
-      scope: scopeLabel,
-      totals: model.totals,
-      groups: model.groups.map((g) => ({
-        fund_type: g.type,
-        funds: g.rows.length,
-        opening: g.opening,
-        income: g.income,
-        expenditure: g.expenditure,
-        net: g.net,
-        closing: g.closing,
-      })),
-      split: model.split,
-      flagged_funds: flaggedFunds.map((f) => f.name),
-      top_movements: (movements.data ?? []).slice(0, 6).map((m) => ({
-        date: m.date,
-        description: m.description ?? m.contact_name ?? '',
-        fund: m.fund_name,
-        net: m.net,
-      })),
-    }
-  }, [model, label, scopeLabel, flaggedFunds, movements.data])
 
   if (sources.loading) {
     return (
@@ -256,9 +240,8 @@ export default function PackBuilderPage({
             </Button>
             <Button
               variant="money"
-              disabled={saving || unreviewedAi}
+              disabled={saving}
               onClick={() => void savePack()}
-              title={unreviewedAi ? 'Review the AI drafts before saving' : undefined}
             >
               {saving ? 'Saving…' : 'Save to pack library'}
             </Button>
@@ -279,10 +262,20 @@ export default function PackBuilderPage({
           </Link>
         </div>
       ) : null}
-      {unreviewedAi ? (
+      {(coverage.data ?? []).length > 0 ? (
         <div className="mb-4 rounded-card border border-warn/50 bg-warn/10 text-warn-ink text-[12.5px] px-4 py-3">
-          One or more sections still carry an unreviewed AI draft. Edit the text or accept it as reviewed before
-          the pack can be saved — nothing ships without human confirmation.
+          <b className="font-medium">
+            {(coverage.data ?? []).length} fund
+            {(coverage.data ?? []).length === 1 ? '' : 's'} in the ledger cannot appear in this pack.
+          </b>{' '}
+          {(coverage.data ?? [])
+            .map((r) => `${r.account_name}${r.ledger_amount != null ? ` (${formatMoney(r.ledger_amount)})` : ''}`)
+            .join(', ')}{' '}
+          — no fund record, because there is no Fund tracking option in Xero. Add the tracking option and
+          re-sync, or issue the pack knowing these are excluded.{' '}
+          <Link to="/funds/integrity" className="underline underline-offset-2 font-medium">
+            Fund coverage check
+          </Link>
         </div>
       ) : null}
 
@@ -358,40 +351,31 @@ export default function PackBuilderPage({
           </p>
         </Card>
 
-        {/* AI commentary */}
+        {/* Commentary — written by the preparer, reviewed before issue */}
         <Card className="px-5 py-4">
           <SectionLabel>Commentary</SectionLabel>
           <p className="text-[12px] text-stone-500 mb-3">
-            Draft from the section's data or polish your own notes. Everything stays editable, and AI text is
-            labelled until a person has reviewed it.
+            Your words on the figures. The numbers in the pack are computed from the ledger; this is the
+            narrative the trustees read alongside them.
           </p>
           <div className="space-y-4">
             <CommentaryEditor
               label="Executive summary"
               hint="Plain-English narrative of the period — movements, drivers and flags."
-              section="executive_summary"
-              context={commentaryContext}
               state={commentary.executive_summary}
               onChange={(next) => setCommentary((c) => ({ ...c, executive_summary: next }))}
-              canUseAi={canUseAi}
             />
             <CommentaryEditor
               label="Note on the figures"
               hint="Optional note for the financial pages — accounting treatment, one-offs, context."
-              section="financials"
-              context={commentaryContext}
               state={commentary.financials}
               onChange={(next) => setCommentary((c) => ({ ...c, financials: next }))}
-              canUseAi={canUseAi}
             />
             <CommentaryEditor
               label="Reserves & outlook"
               hint="Commentary for the restricted vs unrestricted split and the reserves position."
-              section="reserves"
-              context={commentaryContext}
               state={commentary.reserves}
               onChange={(next) => setCommentary((c) => ({ ...c, reserves: next }))}
-              canUseAi={canUseAi}
             />
           </div>
         </Card>
@@ -423,7 +407,7 @@ export default function PackBuilderPage({
             <Button variant="ghost" onClick={() => setPreviewOpen(true)}>
               Preview & print
             </Button>
-            <Button variant="money" disabled={saving || unreviewedAi} onClick={() => void savePack()}>
+            <Button variant="money" disabled={saving} onClick={() => void savePack()}>
               {saving ? 'Saving…' : 'Save to pack library'}
             </Button>
             {isAdmin || isCeo ? (
@@ -454,10 +438,10 @@ export default function PackBuilderPage({
                     </button>
                     <button
                       onClick={() => void savePack()}
-                      disabled={saving || unreviewedAi}
+                      disabled={saving}
                       className={cx(
                         'rounded-full px-4 py-1.5 text-[12px] font-semibold',
-                        saving || unreviewedAi
+                        saving
                           ? 'bg-white/10 text-white/40 cursor-not-allowed'
                           : 'bg-mint text-indigo hover:brightness-95',
                       )}

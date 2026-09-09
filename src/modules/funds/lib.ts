@@ -581,3 +581,17 @@ export async function removeFundManager(fundId: string, profileId: string): Prom
     .eq('profile_id', profileId)
   if (error) throw new Error(error.message)
 }
+
+/**
+ * Fund capital accounts in the balance sheet that have no fund in the
+ * register (and the reverse). A fund that exists only as an equity account —
+ * RF Bowland Trust Capital being the £1.5m case — is invisible to the fund
+ * pages and to board packs, because the platform can only see funds that
+ * exist as a Xero tracking option.
+ */
+export interface FundCoverageRow {
+  account_code: string | null
+  account_name: string
+  ledger_amount: number | null
+  issue: 'no_fund_in_register' | 'no_capital_account'
+}

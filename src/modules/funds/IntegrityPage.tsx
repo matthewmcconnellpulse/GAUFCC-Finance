@@ -28,6 +28,7 @@ import {
   sourceTypeLabel,
   xeroDeepLink,
   xeroTrackingSetupLink,
+  type FundCoverageRow,
   type GlReconRow,
   type IntegrityConflictRow,
   type IntegrityTxnRow,
@@ -43,6 +44,7 @@ interface ChecksData {
   conflictingCount: number
   unmapped: UnmappedOptionRow[]
   glRecon: GlReconRow[]
+  coverage: FundCoverageRow[]
 }
 
 export default function IntegrityPage() {
@@ -70,7 +72,7 @@ function IntegrityInner() {
 
   const checks = useSupabaseQuery<ChecksData>(async () => {
     const { start, end } = periodBounds(period)
-    const [missingRes, conflictingRes, unmappedRes, glRes] = await Promise.all([
+    const [missingRes, conflictingRes, unmappedRes, glRes, coverageRes] = await Promise.all([
       supabase
         .from('v_integrity_missing_tracking')
         .select('*', { count: 'exact' })
@@ -87,8 +89,14 @@ function IntegrityInner() {
         .limit(DRILLDOWN_CAP),
       supabase.from('v_integrity_unmapped_options').select('*').order('name', { ascending: true }),
       supabase.from('v_integrity_gl_recon').select('*').eq('period_month', start).order('account_code'),
+      // Not period-scoped: a fund missing from the register is missing in
+      // every period, and is the one exception that silently changes totals.
+      supabase
+        .from('v_integrity_fund_coverage')
+        .select('*')
+        .order('ledger_amount', { ascending: false, nullsFirst: false }),
     ])
-    for (const res of [missingRes, conflictingRes, unmappedRes, glRes]) {
+    for (const res of [missingRes, conflictingRes, unmappedRes, glRes, coverageRes]) {
       if (res.error) throw new Error(res.error.message)
     }
     return {
@@ -98,6 +106,7 @@ function IntegrityInner() {
       conflictingCount: conflictingRes.count ?? (conflictingRes.data?.length ?? 0),
       unmapped: (unmappedRes.data ?? []) as UnmappedOptionRow[],
       glRecon: (glRes.data ?? []) as GlReconRow[],
+      coverage: (coverageRes.data ?? []) as FundCoverageRow[],
     }
   }, [period])
 
@@ -137,9 +146,12 @@ function IntegrityInner() {
         conflicting: data.conflictingCount,
         unmapped: data.unmapped.length,
         glRecon: glFailures.length,
+        coverage: data.coverage.length,
       }
     : null
-  const allPass = counts !== null && counts.missing + counts.conflicting + counts.unmapped + counts.glRecon === 0
+  const allPass =
+    counts !== null &&
+    counts.missing + counts.conflicting + counts.unmapped + counts.glRecon + counts.coverage === 0
   const stamped = stampQ.data ?? null
 
   async function doStamp(withOverride: boolean) {
@@ -336,7 +348,6 @@ function IntegrityInner() {
             pass={counts.glRecon === 0}
             open={openCheck === 'gl'}
             onToggle={() => toggle('gl')}
-            last
           >
             {data.glRecon.length === 0 ? (
               <div className="text-[12px] text-stone-500">
@@ -346,6 +357,23 @@ function IntegrityInner() {
               <GlDrilldown rows={data.glRecon} />
             )}
           </CheckRow>
+          <CheckRow
+            title="Every fund in the ledger has a fund record"
+            sub="Fund capital accounts in the balance sheet matched to the Fund tracking category"
+            countDisplay={String(counts.coverage)}
+            pass={counts.coverage === 0}
+            open={openCheck === 'coverage'}
+            onToggle={() => toggle('coverage')}
+            last
+          >
+            {data.coverage.length === 0 ? (
+              <div className="text-[12px] text-stone-500">
+                Every fund capital account lines up with a fund in the register.
+              </div>
+            ) : (
+              <CoverageDrilldown rows={data.coverage} />
+            )}
+          </CheckRow>
         </Card>
       ) : null}
 
@@ -353,6 +381,69 @@ function IntegrityInner() {
         <span>Checks reflect the mirrored Xero data · a stamped period is locked for board packs</span>
         <span>last synced {timeAgo(lastSyncedAt)}</span>
       </div>
+    </div>
+  )
+}
+
+/**
+ * A fund the platform cannot see. The register is built from Xero's "Fund"
+ * tracking category, so a fund that exists only as a balance-sheet capital
+ * account never appears on a fund page or in a board pack — and until this
+ * check existed, nothing said so.
+ */
+function CoverageDrilldown({ rows }: { rows: FundCoverageRow[] }) {
+  const missingFunds = rows.filter((r) => r.issue === 'no_fund_in_register')
+  const missingAccounts = rows.filter((r) => r.issue === 'no_capital_account')
+  return (
+    <div className="space-y-4">
+      {missingFunds.length > 0 ? (
+        <div>
+          <div className="text-[11px] font-medium text-warn-ink mb-1.5">
+            In the ledger, not in the register — excluded from fund pages and board packs
+          </div>
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr>
+                <th className="th-register">Account</th>
+                <th className="th-register">Code</th>
+                <th className="th-register text-right">Amount in the ledger</th>
+              </tr>
+            </thead>
+            <tbody>
+              {missingFunds.map((r) => (
+                <tr key={r.account_code ?? r.account_name}>
+                  <td className="td-register text-ink">{r.account_name}</td>
+                  <td className="td-register font-mono text-[11px] text-stone-500">{r.account_code}</td>
+                  <td className="td-register text-right font-mono">
+                    {r.ledger_amount != null ? formatMoney(r.ledger_amount) : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[11px] text-stone-500 mt-2 leading-relaxed">
+            Give the fund a tracking option in Xero (Settings → Tracking → Fund) and it appears here after the
+            next sync. Where the two sides only spell the fund differently, align the names so a reader can tie
+            the pack to the ledger.
+          </p>
+        </div>
+      ) : null}
+      {missingAccounts.length > 0 ? (
+        <div>
+          <div className="text-[11px] font-medium text-stone-600 mb-1.5">
+            In the register, with no capital account of its own
+          </div>
+          <ul className="text-[12px] text-stone-700 space-y-0.5">
+            {missingAccounts.map((r) => (
+              <li key={r.account_name}>{r.account_name}</li>
+            ))}
+          </ul>
+          <p className="text-[11px] text-stone-500 mt-2 leading-relaxed">
+            Usually fine — these funds are carried within the general reserves rather than a named capital
+            account. Worth a look if you expect one to hold its own balance.
+          </p>
+        </div>
+      ) : null}
     </div>
   )
 }
