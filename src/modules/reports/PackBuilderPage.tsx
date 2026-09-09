@@ -32,6 +32,9 @@ import {
 import { invokeFunction, supabase } from '@/lib/supabase'
 import { formatMoney } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
+import { fetchPackForecast } from '@/modules/cashflow/lib'
+import { fetchXeroReport } from '@/modules/financials/lib'
+import { fetchWholeBusinessPl, indexReportRows } from '@/modules/recon/lib'
 import { CommentaryEditor } from './CommentaryEditor'
 import { FundNoteEditor } from './FundNoteEditor'
 import { PeriodControls, Segmented } from './components'
@@ -44,6 +47,15 @@ import PackDocument, {
   type PackInputs,
 } from './PackDocument'
 import { buildPackHtml, PACK_CSS } from './packCss'
+import type { ManagementData } from './ManagementPages'
+import {
+  balanceSheetHeadlines,
+  buildReserveCoverage,
+  compareToBudget,
+  fetchAgedAnalysis,
+  fetchBudgetDetail,
+  fetchManagementSettings,
+} from './management'
 import {
   buildMonthlyIndex,
   buildReportModel,
@@ -60,6 +72,45 @@ import {
   type MovementRow,
   type SettingsSnapshot,
 } from './lib'
+
+/** One live source's status in the assembly panel. */
+function SourceRow({
+  label,
+  detail,
+  loading,
+  error,
+  ok,
+  okDetail,
+  pendingDetail,
+}: {
+  label: string
+  detail: string
+  loading: boolean
+  error: string | null
+  ok: boolean
+  okDetail?: string | null
+  pendingDetail?: string | null
+}) {
+  const tone = loading ? 'neutral' : error ? 'danger' : ok ? 'good' : 'warn'
+  const status = loading ? 'Reading…' : error ? 'Unavailable' : ok ? 'Included' : 'Not set up'
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-2 px-3.5 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[12.5px] text-ink font-medium">{label}</div>
+        <div className="text-[11px] text-stone-500">{detail}</div>
+        {!loading && (error || (!ok && pendingDetail)) ? (
+          <div className={cx('text-[11px] mt-0.5', error ? 'text-danger-ink' : 'text-warn-ink')}>
+            {error ?? pendingDetail}
+          </div>
+        ) : null}
+        {!loading && ok && okDetail ? (
+          <div className="text-[11px] text-stone-600 mt-0.5 tabular-nums">{okDetail}</div>
+        ) : null}
+      </div>
+      <StatusChip tone={tone}>{status}</StatusChip>
+    </div>
+  )
+}
 
 interface GeneratePackResponse {
   pack_id: string
@@ -148,6 +199,104 @@ export default function PackBuilderPage({
   }, [model, flaggedFunds, extraFundIds])
 
 
+  // ── The whole-charity management reports ──────────────────────────────────
+  // Each source is fetched independently and its failure captured rather than
+  // thrown: one unreachable live source must not stop a pack assembling, and
+  // the page for it says on the page that it could not be included.
+
+  const managementPl = useSupabaseQuery(
+    () => fetchWholeBusinessPl(state.period),
+    [state.period.start, state.period.end],
+  )
+
+  const balanceSheet = useSupabaseQuery(
+    async () => {
+      const report = await fetchXeroReport('BalanceSheet', { date: state.period.end })
+      return { report, index: indexReportRows(report) }
+    },
+    [state.period.end],
+  )
+
+  const aged = useSupabaseQuery(() => fetchAgedAnalysis(state.period.end), [state.period.end])
+
+  const managementSettings = useSupabaseQuery(fetchManagementSettings, [])
+
+  const budget = useSupabaseQuery(
+    async () => {
+      const settings = managementSettings.data
+      if (!settings?.xeroBudgetId) return null
+      const [current, prior] = await Promise.all([
+        fetchBudgetDetail(settings.xeroBudgetId, { from: state.period.start, to: state.period.end }),
+        settings.xeroPriorBudgetId
+          ? fetchBudgetDetail(settings.xeroPriorBudgetId).catch(() => null)
+          : Promise.resolve(null),
+      ])
+      return { current, prior }
+    },
+    [managementSettings.data?.xeroBudgetId, managementSettings.data?.xeroPriorBudgetId, state.period.start, state.period.end],
+  )
+
+  const forecast = useSupabaseQuery(() => fetchPackForecast({ weeks: 13, months: 3 }), [])
+
+  const management = useMemo<ManagementData>(() => {
+    const pl = managementPl.data ?? null
+    const bsIndex = balanceSheet.data?.index ?? null
+
+    // Budget compares against the P&L actuals by account code, so it can only
+    // be built once both are in.
+    let budgetComparison = null
+    if (budget.data?.current && pl) {
+      const actualByCode = new Map<string, { name: string; amount: number }>()
+      for (const group of [...pl.income, ...pl.expenditure]) {
+        for (const row of group.rows) actualByCode.set(row.code, { name: row.name, amount: row.amount })
+      }
+      budgetComparison = compareToBudget(actualByCode, budget.data.current, budget.data.prior)
+    }
+
+    const annualBudget = managementSettings.data?.annualOperatingBudget ?? null
+    return {
+      pl,
+      plError: managementPl.error ?? null,
+      balanceSheetReport: balanceSheet.data?.report ?? null,
+      balanceSheetHeadlines: balanceSheetHeadlines(bsIndex),
+      balanceSheetError: balanceSheet.error ?? null,
+      aged: aged.data ?? null,
+      agedError: aged.error ?? null,
+      budget: budgetComparison,
+      budgetLabel: budget.data?.current?.description ?? null,
+      priorBudgetLabel: budget.data?.prior?.description ?? null,
+      budgetError:
+        budget.error ??
+        (managementSettings.data && !managementSettings.data.xeroBudgetId
+          ? 'no Xero budget has been chosen to track against. Pick one under Settings — it needs the accounting.budgets.read scope on the Xero connection.'
+          : null),
+      coverage: model
+        ? buildReserveCoverage({
+            model,
+            balanceSheet: bsIndex,
+            balanceSheetError: balanceSheet.error ?? null,
+            annualBudget,
+            budgetSource: annualBudget === null ? null : 'setting',
+          })
+        : null,
+      forecast: forecast.data ?? null,
+      forecastError: forecast.error ?? null,
+    }
+  }, [
+    managementPl.data,
+    managementPl.error,
+    balanceSheet.data,
+    balanceSheet.error,
+    aged.data,
+    aged.error,
+    budget.data,
+    budget.error,
+    managementSettings.data,
+    forecast.data,
+    forecast.error,
+    model,
+  ])
+
   const notedFundCount = useMemo(
     () => fundPages.filter((f) => (fundNotes[f.fund_id]?.text ?? '').trim()).length,
     [fundPages, fundNotes],
@@ -171,6 +320,7 @@ export default function PackBuilderPage({
           preparedBy: profile?.full_name ?? 'Pulse Accountants',
           commentary,
           fundNotes,
+          management,
         }
       : null
 
@@ -367,6 +517,97 @@ export default function PackBuilderPage({
           </p>
         </Card>
 
+        {/* Whole-charity reports — live sources, so say what came back */}
+        <Card className="px-5 py-4">
+          <SectionLabel>Whole-charity management reports</SectionLabel>
+          <p className="text-[12px] text-stone-500 mb-3">
+            These pages sit above the fund reports. The balance sheet, debtors, creditors and budget are read
+            live from Xero when the pack is assembled — anything that could not be read says so on its own page
+            rather than being dropped, so you can decide whether to issue the pack or fix the source first.
+          </p>
+          <div className="divide-y divide-stone-150 border border-stone-150 rounded-control">
+            <SourceRow
+              label="Income and expenditure"
+              detail="Whole charity on SORP headings, from the ledger mirror"
+              loading={managementPl.loading}
+              error={managementPl.error}
+              ok={!!managementPl.data}
+              okDetail={
+                managementPl.data
+                  ? `${managementPl.data.lineCount.toLocaleString('en-GB')} lines · net ${formatMoney(managementPl.data.net)}`
+                  : null
+              }
+            />
+            <SourceRow
+              label="Balance sheet"
+              detail={`As at ${state.period.end}, live from Xero`}
+              loading={balanceSheet.loading}
+              error={balanceSheet.error}
+              ok={!!balanceSheet.data}
+              okDetail={
+                management.balanceSheetHeadlines.netAssets !== null
+                  ? `Net assets ${formatMoney(management.balanceSheetHeadlines.netAssets)}`
+                  : 'Read, but no net assets line identified'
+              }
+            />
+            <SourceRow
+              label="Debtors and creditors"
+              detail="Outstanding invoices, live from Xero"
+              loading={aged.loading}
+              error={aged.error}
+              ok={!!aged.data}
+              okDetail={
+                aged.data
+                  ? `${formatMoney(aged.data.receivables.total)} owed to us · ${formatMoney(aged.data.payables.total)} owed by us`
+                  : null
+              }
+            />
+            <SourceRow
+              label="Budget tracking"
+              detail="This year and last year, from a Xero budget"
+              loading={budget.loading}
+              error={budget.error}
+              ok={!!management.budget}
+              okDetail={
+                management.budget
+                  ? `${management.budgetLabel ?? 'Budget'} · variance ${formatMoney(management.budget.variance)}`
+                  : null
+              }
+              pendingDetail={
+                managementSettings.data && !managementSettings.data.xeroBudgetId
+                  ? 'No Xero budget chosen yet — set one in Settings'
+                  : null
+              }
+            />
+            <SourceRow
+              label="Cash flow forecast"
+              detail="From the current week, 13 weeks then 3 months"
+              loading={forecast.loading}
+              error={forecast.error}
+              ok={!!management.forecast}
+              okDetail={
+                management.forecast
+                  ? `Closing ${formatMoney(management.forecast.closingBalance)}${management.forecast.goesNegativeAt ? ` · goes negative at ${management.forecast.goesNegativeAt}` : ''}`
+                  : null
+              }
+              pendingDetail={!management.forecast ? 'The cash flow forecast has not been set up yet' : null}
+            />
+            <SourceRow
+              label="Reserve coverage"
+              detail="(General funds + cash at bank) ÷ annual operating budget"
+              loading={managementSettings.loading}
+              error={null}
+              ok={management.coverage?.months != null}
+              okDetail={
+                management.coverage?.months != null
+                  ? `${management.coverage.months.toFixed(1)} months of cover`
+                  : null
+              }
+              pendingDetail={management.coverage?.unavailableReason ?? null}
+            />
+          </div>
+        </Card>
+
         {/* Per-fund notes — one per fund page in the pack */}
         <Card className="px-5 py-4">
           <SectionLabel>Notes on individual funds</SectionLabel>
@@ -446,6 +687,10 @@ export default function PackBuilderPage({
           ) : null}
           <ul className="text-[12.5px] text-stone-700 space-y-1.5">
             <li>Cover — {PACK_CONCEPTS.find((c) => c.value === concept)?.label}, contents, executive summary</li>
+            <li>
+              Whole-charity management reports — income and expenditure, balance sheet, debtors, creditors,
+              budget, cash flow forecast, reserves and coverage
+            </li>
             <li>Charity-level financials — movements by fund, waterfall and reserves split</li>
             <li>Top ten movements in funds — largest net movers, ranked</li>
             <li>

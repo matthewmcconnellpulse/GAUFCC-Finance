@@ -32,6 +32,16 @@ import {
   type StampInfo,
 } from './lib'
 
+import {
+  AgedPage,
+  BudgetPage,
+  ForecastPage,
+  ManagementBalanceSheetPage,
+  ManagementPlPage,
+  ReservesPage,
+  type ManagementData,
+} from './ManagementPages'
+
 export type PackConcept = 'ledger' | 'waveform' | 'minute'
 
 export const PACK_CONCEPTS: Array<{ value: PackConcept; label: string }> = [
@@ -85,6 +95,12 @@ export interface PackInputs {
   preparedBy: string
   commentary: PackCommentary
   fundNotes: PackFundNotes
+  /**
+   * The whole-charity reports that sit above the fund pages. Each field is
+   * independently nullable: a pack still assembles when one live source is
+   * unreachable, and the page in question says so rather than vanishing.
+   */
+  management: ManagementData
 }
 
 // ── Formatting helpers (SOFA conventions: whole £, expenditure in brackets) ──
@@ -151,10 +167,26 @@ export default function PackDocument(props: PackInputs) {
   const { model } = props
   const sofaPages = chunk(sofaEntries(model), SOFA_ROWS_PER_PAGE)
 
-  // Page numbering: cover 1 · contents 2 · exec 3 · sofa 4.. · movement page ·
-  // fund pages · integrity · appendix
+  // Page numbering: cover 1 · contents 2 · exec 3 · the whole-charity
+  // management reports · then the fund-level pages · integrity · appendix.
+  // The management reports come first deliberately: trustees should read the
+  // charity's own position before the fund-by-fund detail.
   let page = 3
   const execPage = page
+  page += 1
+  const managementPlPage = page
+  page += 1
+  const balanceSheetPage = page
+  page += 1
+  const debtorsPage = page
+  page += 1
+  const creditorsPage = page
+  page += 1
+  const budgetPage = page
+  page += 1
+  const forecastPage = page
+  page += 1
+  const reservesPage = page
   page += 1
   const sofaStart = page
   page += sofaPages.length
@@ -171,6 +203,13 @@ export default function PackDocument(props: PackInputs) {
 
   const toc: TocEntry[] = [
     { title: 'Executive summary', sub: 'The period in brief, with commentary', page: execPage },
+    { title: 'Income and expenditure', sub: 'Whole charity, on SORP headings', page: managementPlPage },
+    { title: 'Balance sheet', sub: 'Whole charity, as reported by Xero', page: balanceSheetPage },
+    { title: 'Debtors', sub: 'Outstanding sales invoices by age', page: debtorsPage },
+    { title: 'Creditors', sub: 'Outstanding bills by age', page: creditorsPage },
+    { title: 'Against budget', sub: 'This year and last year’s budget', page: budgetPage },
+    { title: 'Cash flow forecast', sub: 'From the current week forward', page: forecastPage },
+    { title: 'Reserves and coverage', sub: 'Free reserves against annual operating cost', page: reservesPage },
     { title: 'Movements by fund', sub: 'SOFA-style income and expenditure', page: sofaStart },
     { title: 'Where the period moved', sub: 'Balance waterfall and reserves split', page: movementPage },
     { title: 'Top ten movements in funds', sub: 'Largest net movements, whichever direction', page: topMovementPage },
@@ -195,6 +234,47 @@ export default function PackDocument(props: PackInputs) {
       <CoverPage {...props} />
       <ContentsPage toc={toc} footer={footer(2)} />
       <ExecutiveSummaryPage {...props} pageNum={execPage} footer={footer(execPage)} />
+
+      {/* Whole-charity management reports, above the fund reports */}
+      <ManagementPlPage
+        data={props.management}
+        period={props.period}
+        periodLabel={props.periodLabel}
+        pageNum={managementPlPage}
+        footer={footer(managementPlPage)}
+      />
+      <ManagementBalanceSheetPage
+        data={props.management}
+        asAt={props.period.end}
+        pageNum={balanceSheetPage}
+        footer={footer(balanceSheetPage)}
+      />
+      <AgedPage
+        data={props.management}
+        side="receivables"
+        pageNum={debtorsPage}
+        footer={footer(debtorsPage)}
+      />
+      <AgedPage
+        data={props.management}
+        side="payables"
+        pageNum={creditorsPage}
+        footer={footer(creditorsPage)}
+      />
+      <BudgetPage
+        data={props.management}
+        periodLabel={props.periodLabel}
+        pageNum={budgetPage}
+        footer={footer(budgetPage)}
+      />
+      <ForecastPage data={props.management} pageNum={forecastPage} footer={footer(forecastPage)} />
+      <ReservesPage
+        data={props.management}
+        totals={props.model.totals}
+        pageNum={reservesPage}
+        footer={footer(reservesPage)}
+      />
+
       {sofaPages.map((entries, i) => (
         <SofaPage
           key={i}

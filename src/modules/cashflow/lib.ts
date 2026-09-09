@@ -394,6 +394,141 @@ export async function applyParsedCells(
   }
 }
 
+// ── Pack summary (the board pack's three-month forecast) ────────────────────
+
+export interface PackForecastPeriod {
+  label: string
+  shortLabel: string
+  kind: 'week' | 'month'
+  income: number
+  outgoings: number
+  net: number
+  balanceBf: number
+  balanceCf: number
+}
+
+export interface PackForecast {
+  /** Weeks and months from the current week out to the horizon. */
+  periods: PackForecastPeriod[]
+  openingBalance: number
+  closingBalance: number
+  totalIncome: number
+  totalOutgoings: number
+  net: number
+  /** The first period the balance goes negative, if it does. */
+  goesNegativeAt: string | null
+  lowestBalance: number
+  lowestAt: string | null
+  /** Named lines with the largest outflow over the window. */
+  topOutgoings: Array<{ name: string; total: number }>
+  horizonLabel: string
+}
+
+/**
+ * The forecast as a board pack wants it: from the week we are in, forward for
+ * `weeks` weeks and `months` months, with the balance cascaded through the
+ * completed weeks so the opening figure is the real position.
+ *
+ * Purpose-built for the reports module rather than exposing the whole grid —
+ * a pack needs the shape of the next quarter, not 380 editable cells.
+ */
+export async function fetchPackForecast(opts?: {
+  weeks?: number
+  months?: number
+}): Promise<PackForecast | null> {
+  const config = await fetchConfig()
+  if (!config) return null
+
+  const [lines, cells] = await Promise.all([fetchLines(), fetchCells()])
+  const all = buildPeriods(config)
+  const byKey = new Map<string, number>()
+  for (const c of cells) byKey.set(`${c.line_id}|${c.period_start}`, c.amount)
+
+  const incomeLines = lines.filter((l) => l.section === 'income')
+  const outgoingLines = lines.filter((l) => l.section === 'outgoing')
+  const amountFor = (lineIds: string[], periodStart: string): number =>
+    round2(lineIds.reduce((s, id) => s + (byKey.get(`${id}|${periodStart}`) ?? 0), 0))
+
+  // Cascade from the anchor so the first shown period's b/fwd is right.
+  let running = config.opening_balance
+  const cascaded = all.map((per) => {
+    const income = amountFor(
+      incomeLines.map((l) => l.id),
+      per.start,
+    )
+    const outgoings = amountFor(
+      outgoingLines.map((l) => l.id),
+      per.start,
+    )
+    const net = round2(income + outgoings)
+    const balanceBf = round2(running)
+    running = round2(running + net)
+    return { per, income, outgoings, net, balanceBf, balanceCf: running }
+  })
+
+  // The window: the current week onwards, trimmed to the requested horizon.
+  const wanted = { weeks: opts?.weeks ?? 13, months: opts?.months ?? 3 }
+  const forward = cascaded.filter((row) => !row.per.ended)
+  const weeks = forward.filter((row) => row.per.kind === 'week').slice(0, wanted.weeks)
+  const months = forward.filter((row) => row.per.kind === 'month').slice(0, wanted.months)
+  const window = [...weeks, ...months]
+  if (window.length === 0) return null
+
+  const periods: PackForecastPeriod[] = window.map((row) => ({
+    label: row.per.label,
+    shortLabel: row.per.shortLabel,
+    kind: row.per.kind,
+    income: row.income,
+    outgoings: row.outgoings,
+    net: row.net,
+    balanceBf: row.balanceBf,
+    balanceCf: row.balanceCf,
+  }))
+
+  const negativeIndex = periods.findIndex((p) => p.balanceCf < 0)
+  let lowestAt: string | null = null
+  let lowestBalance = periods[0].balanceCf
+  for (const p of periods) {
+    if (p.balanceCf <= lowestBalance) {
+      lowestBalance = p.balanceCf
+      lowestAt = p.label
+    }
+  }
+
+  const windowStarts = new Set(window.map((row) => row.per.start))
+  const topOutgoings = outgoingLines
+    .map((l) => ({
+      name: l.name,
+      total: round2(
+        [...windowStarts].reduce((s, start) => s + (byKey.get(`${l.id}|${start}`) ?? 0), 0),
+      ),
+    }))
+    .filter((l) => l.total !== 0)
+    .sort((a, b) => a.total - b.total)
+    .slice(0, 6)
+
+  const monthCount = months.length
+  const weekCount = weeks.length
+  return {
+    periods,
+    openingBalance: periods[0].balanceBf,
+    closingBalance: periods[periods.length - 1].balanceCf,
+    totalIncome: round2(periods.reduce((s, p) => s + p.income, 0)),
+    totalOutgoings: round2(periods.reduce((s, p) => s + p.outgoings, 0)),
+    net: round2(periods.reduce((s, p) => s + p.net, 0)),
+    goesNegativeAt: negativeIndex === -1 ? null : periods[negativeIndex].label,
+    lowestBalance,
+    lowestAt,
+    topOutgoings,
+    horizonLabel: [
+      weekCount > 0 ? `${weekCount} week${weekCount === 1 ? '' : 's'}` : '',
+      monthCount > 0 ? `${monthCount} month${monthCount === 1 ? '' : 's'}` : '',
+    ]
+      .filter(Boolean)
+      .join(' then '),
+  }
+}
+
 // ── CSV export (mirrors the template layout) ─────────────────────────────────
 
 function csvField(value: string | number): string {
