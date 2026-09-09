@@ -26,7 +26,6 @@ import {
   fetchXeroActuals,
   insertLine,
   lineActual,
-  periodEnded,
   round2,
   seedTemplateLines,
   todayIso,
@@ -180,6 +179,109 @@ function SetupCard({ onSaved }: { onSaved: () => void }) {
   )
 }
 
+// ── Settings panel (anchor, horizon) ────────────────────────────────────────
+
+/**
+ * The forecast's anchor and horizon, edited in place.
+ *
+ * These used to be three window.prompt() calls, which is no way to change the
+ * opening balance of a cashflow: no validation until you had already committed,
+ * no way to see the current values while typing, and nothing to cancel back to.
+ */
+function SettingsPanel({
+  config,
+  currentWeekLabel,
+  onClose,
+  onSaved,
+}: {
+  config: CashflowConfig
+  currentWeekLabel: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const { profile } = useAuth()
+  const [balance, setBalance] = useState(String(config.opening_balance))
+  const [date, setDate] = useState(config.opening_date)
+  const [weeks, setWeeks] = useState(String(config.weekly_weeks))
+  const [months, setMonths] = useState(String(config.monthly_months))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function save() {
+    if (!profile) return
+    const opening = parseAmountInput(balance)
+    if (opening === null) {
+      setError('The opening balance needs to be a number.')
+      return
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setError('The opening date needs to be a real date.')
+      return
+    }
+    const w = Number(weeks)
+    const m = Number(months)
+    if (!Number.isInteger(w) || w < 1 || w > 52) {
+      setError('Weekly columns must be between 1 and 52.')
+      return
+    }
+    if (!Number.isInteger(m) || m < 0 || m > 24) {
+      setError('Monthly columns must be between 0 and 24.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await upsertConfig(
+        { ...config, opening_balance: opening, opening_date: date, weekly_weeks: w, monthly_months: m },
+        profile.id,
+      )
+      onSaved()
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The settings could not be saved.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="p-4 border-indigo/30">
+      <div className="flex items-start justify-between gap-3">
+        <SectionLabel>Forecast settings</SectionLabel>
+        <button onClick={onClose} className="text-stone-400 hover:text-ink text-[14px] leading-none" aria-label="Close settings">
+          ×
+        </button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mt-1">
+        <Field label="Opening balance" hint="The bank position as at the date beside it.">
+          <Input value={balance} onChange={(e) => setBalance(e.target.value)} className="font-mono" />
+        </Field>
+        <Field label="Stated at" hint="Snapped to that week's Monday.">
+          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </Field>
+        <Field label="Weekly columns" hint={`Counted forward from ${currentWeekLabel}.`}>
+          <Input value={weeks} onChange={(e) => setWeeks(e.target.value)} inputMode="numeric" className="font-mono" />
+        </Field>
+        <Field label="Monthly columns" hint="Follow on after the last week.">
+          <Input value={months} onChange={(e) => setMonths(e.target.value)} inputMode="numeric" className="font-mono" />
+        </Field>
+      </div>
+      {error ? <ErrorNotice message={error} /> : null}
+      <p className="text-[11px] text-stone-500 mt-1">
+        The forecast window always starts at the week you are in, so there is nothing to roll forward — leave
+        the opening balance where it was last reconciled and the weeks in between carry the balance through.
+      </p>
+      <div className="flex items-center gap-2 mt-3">
+        <Button variant="money" disabled={busy} onClick={() => void save()}>
+          {busy ? 'Saving…' : 'Save settings'}
+        </Button>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 // ── Line editor (rename, Xero codes, fill, remove) ───────────────────────────
 
 function LineEditor({
@@ -200,7 +302,7 @@ function LineEditor({
   const [busy, setBusy] = useState(false)
   const [filled, setFilled] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const endedCount = periods.filter((p) => periodEnded(p, todayIso())).length
+  const endedCount = periods.filter((p) => p.ended).length
 
   async function save() {
     setBusy(true)
@@ -311,6 +413,8 @@ export default function CashflowPage() {
   )
 
   const [editingLine, setEditingLine] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Local overlay so cell edits render instantly without a refetch round-trip.
   const [overrides, setOverrides] = useState<Map<string, { amount: number; note: string | null }>>(new Map())
@@ -348,6 +452,20 @@ export default function CashflowPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periods, incomeLines, outgoingLines, cellMap, config?.opening_balance])
 
+  // Completed weeks between the opening date and today are folded away by
+  // default — they are the cascade the current week's b/fwd depends on, not
+  // something the forecast reader needs across the screen. Column indices are
+  // kept alongside so every row can slice the same way as the totals.
+  const historyPeriods = useMemo(() => periods.filter((per) => per.ended), [periods])
+  const currentPeriod = useMemo(() => periods.find((per) => per.current) ?? null, [periods])
+  const visible = useMemo(() => {
+    const idx = periods
+      .map((per, i) => ({ per, i }))
+      .filter(({ per }) => showHistory || !per.ended)
+    return { periods: idx.map((x) => x.per), indices: idx.map((x) => x.i) }
+  }, [periods, showHistory])
+  const pick = <T,>(values: T[]): T[] => visible.indices.map((i) => values[i])
+
   async function commitCell(line: CashflowLine, period: CfPeriod, amount: number) {
     if (!profile) return
     setOverrides((prev) => new Map(prev).set(`${line.id}|${period.start}`, { amount, note: null }))
@@ -367,7 +485,7 @@ export default function CashflowPage() {
     let filled = 0
     const next = new Map(overrides)
     for (const per of periods) {
-      if (!periodEnded(per, today)) continue
+      if (!per.ended) continue
       const amount = lineActual(actuals, line.account_codes, per.start)
       next.set(`${line.id}|${per.start}`, { amount, note: 'xero' })
       await upsertCell({ line_id: line.id, period_start: per.start, amount, note: 'xero', updated_by: profile.id })
@@ -439,71 +557,42 @@ export default function CashflowPage() {
   }
 
   const balanceSeries: ChartSeries[] = [
-    { key: 'balance', label: 'Main account balance c/fwd', slot: 0, values: totals.balanceCf },
+    { key: 'balance', label: 'Main account balance c/fwd', slot: 0, values: pick(totals.balanceCf) },
   ]
   const today = todayIso()
   const editingLineObj = lines.find((l) => l.id === editingLine) ?? null
 
   const configBar = (
-    <div className="flex flex-wrap items-center gap-3 text-[11.5px] text-stone-600">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[11.5px] text-stone-600">
       <span>
-        Opening balance{' '}
-        <b className="figure text-ink">{money0(config.opening_balance)}</b> on{' '}
+        Opening balance <b className="figure text-ink">{money0(config.opening_balance)}</b> stated at{' '}
         <span className="font-mono">{config.opening_date}</span>
       </span>
-      {canEdit ? (
-        <button
-          onClick={() => {
-            const raw = window.prompt('Opening balance (b/fwd for the first week):', String(config.opening_balance))
-            if (raw === null || !profile) return
-            const parsed = parseAmountInput(raw)
-            if (parsed === null) return
-            void upsertConfig({ ...config, opening_balance: parsed }, profile.id).then(() => configQ.refetch())
-          }}
-          className="text-indigo hover:underline underline-offset-2"
-        >
-          change
-        </button>
-      ) : null}
       <span className="text-stone-400">·</span>
       <span>
-        {config.weekly_weeks} weekly + {config.monthly_months} monthly columns
+        Forecast runs {config.weekly_weeks} weeks from{' '}
+        <b className="text-ink">{currentPeriod?.label ?? 'this week'}</b>, then {config.monthly_months} months
       </span>
-      {canEdit ? (
-        <button
-          onClick={() => {
-            const raw = window.prompt(
-              'Columns as "weeks,months" (e.g. 13,6). The first week stays anchored to the opening date:',
-              `${config.weekly_weeks},${config.monthly_months}`,
-            )
-            if (raw === null || !profile) return
-            const m = /^\s*(\d{1,2})\s*,\s*(\d{1,2})\s*$/.exec(raw)
-            if (!m) return
-            void upsertConfig(
-              { ...config, weekly_weeks: Number(m[1]), monthly_months: Number(m[2]) },
-              profile.id,
-            ).then(() => configQ.refetch())
-          }}
-          className="text-indigo hover:underline underline-offset-2"
-        >
-          change
-        </button>
+      {historyPeriods.length > 0 ? (
+        <>
+          <span className="text-stone-400">·</span>
+          <button
+            onClick={() => setShowHistory((v) => !v)}
+            className="text-indigo hover:underline underline-offset-2"
+          >
+            {showHistory ? 'hide' : 'show'} {historyPeriods.length} completed week
+            {historyPeriods.length === 1 ? '' : 's'}
+          </button>
+        </>
       ) : null}
       {canEdit ? (
         <>
           <span className="text-stone-400">·</span>
           <button
-            onClick={() => {
-              const raw = window.prompt(
-                'Roll the forecast forward — new first-week date (snapped to Monday):',
-                config.opening_date,
-              )
-              if (raw === null || !profile || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return
-              void upsertConfig({ ...config, opening_date: raw }, profile.id).then(() => configQ.refetch())
-            }}
+            onClick={() => setSettingsOpen((v) => !v)}
             className="text-indigo hover:underline underline-offset-2"
           >
-            roll forward
+            {settingsOpen ? 'close settings' : 'settings'}
           </button>
         </>
       ) : null}
@@ -536,10 +625,18 @@ export default function CashflowPage() {
             ) : null}
           </span>
         </td>
-        {periods.map((per) => {
+        {visible.periods.map((per) => {
           const cell = cellAt(l.id, per)
           return (
-            <td key={per.start} className={cx('td-register text-right whitespace-nowrap', periodEnded(per, today) && 'bg-paper-2/50')}>
+            <td
+              key={per.start}
+              className={cx(
+                'td-register text-right whitespace-nowrap',
+                per.ended && 'bg-paper-2/50',
+                per.current && 'bg-indigo/[.04]',
+                per.kind === 'month' && 'border-l border-stone-150',
+              )}
+            >
               <CellEditor
                 value={cell?.amount ?? 0}
                 isXero={cell?.note === 'xero'}
@@ -562,8 +659,9 @@ export default function CashflowPage() {
         <div>
           <h1 className="font-display text-[26px] text-ink">Cash flow</h1>
           <p className="text-[12.5px] text-stone-500 mt-1">
-            Weekly forecast rolling into monthly — every figure is editable; completed weeks can be filled from
-            Xero. Outgoings are entered as money out (type 500, it stores −500; use +500 for a refund in).
+            Weekly forecast rolling into monthly, starting from the week you are in — every figure is editable
+            and completed weeks can be filled from Xero. Outgoings are entered as money out (type 500, it
+            stores −500; use +500 for a refund in).
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -575,6 +673,14 @@ export default function CashflowPage() {
 
       {configBar}
       {error ? <ErrorNotice message={error} /> : null}
+      {settingsOpen && canEdit ? (
+        <SettingsPanel
+          config={config}
+          currentWeekLabel={currentPeriod?.label ?? 'this week'}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={() => configQ.refetch()}
+        />
+      ) : null}
       {editingLineObj ? (
         <LineEditor
           line={editingLineObj}
@@ -589,9 +695,16 @@ export default function CashflowPage() {
       <Card className="p-4">
         <h3 className="text-[13px] font-medium text-ink mb-1">Projected main account balance</h3>
         <p className="text-[11px] text-stone-500 mb-3">
-          Balance carried forward per column — opening balance plus cumulative net movement. Hover for figures.
+          Balance carried forward per column — opening balance plus cumulative net movement. Dates are week
+          commencing; hover any point for the full label and figure.
         </p>
-        <MultiLineChart labels={periods.map((per) => per.label)} series={balanceSeries} ariaLabel="Projected balance by period" />
+        <MultiLineChart
+          labels={visible.periods.map((per) => per.label)}
+          tickLabels={visible.periods.map((per) => per.shortLabel)}
+          series={balanceSeries}
+          markerIndex={visible.periods.findIndex((per) => per.current)}
+          ariaLabel="Projected balance by period"
+        />
         {totals.balanceCf.some((v) => v < 0) ? (
           <p className="text-[11.5px] text-danger-ink mt-2">
             ⚠ The balance goes negative in{' '}
@@ -603,16 +716,27 @@ export default function CashflowPage() {
       {/* The grid */}
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="text-[11.5px]" style={{ minWidth: periods.length * 104 + 260 }}>
+          <table className="text-[11.5px]" style={{ minWidth: visible.periods.length * 104 + 260 }}>
             <thead>
               <tr>
-                <th className="th-register sticky left-0 bg-white z-10 min-w-[240px]">Week beginning / month</th>
-                {periods.map((per) => (
+                <th className="th-register sticky left-0 bg-white z-10 min-w-[240px]">
+                  Week commencing / month
+                </th>
+                {visible.periods.map((per) => (
                   <th
                     key={per.start}
-                    className={cx('th-register text-right whitespace-nowrap', per.kind === 'month' && 'border-l border-stone-150')}
+                    className={cx(
+                      'th-register text-right whitespace-nowrap',
+                      per.kind === 'month' && 'border-l border-stone-150',
+                      per.current && 'bg-indigo/[.05]',
+                    )}
                   >
-                    <span className={cx(periodEnded(per, today) && 'text-stone-400')}>{per.label}</span>
+                    <span className={cx('block', per.ended && 'text-stone-400', per.current && 'text-indigo font-semibold')}>
+                      {per.shortLabel}
+                    </span>
+                    <span className="block text-[9px] font-normal tracking-normal normal-case text-stone-400">
+                      {per.current ? 'this week' : per.kind === 'month' ? 'month' : per.ended ? 'ended' : ''}
+                    </span>
                   </th>
                 ))}
               </tr>
@@ -627,12 +751,12 @@ export default function CashflowPage() {
                     </button>
                   ) : null}
                 </td>
-                <td colSpan={periods.length} />
+                <td colSpan={visible.periods.length} />
               </tr>
               {sectionRows(incomeLines, 'income')}
               <tr className="bg-paper-2 font-medium">
                 <td className="td-register sticky left-0 bg-paper-2 z-10">Total income</td>
-                {totals.totalIncome.map((v, i) => (
+                {pick(totals.totalIncome).map((v, i) => (
                   <td key={i} className="td-register figure text-right whitespace-nowrap">
                     {figure(v)}
                   </td>
@@ -641,7 +765,7 @@ export default function CashflowPage() {
               {actuals ? (
                 <tr className="text-stone-500">
                   <td className="td-register sticky left-0 bg-white z-10 text-[10.5px]">Xero actual cash in</td>
-                  {periods.map((per) => (
+                  {visible.periods.map((per) => (
                     <td key={per.start} className="td-register figure text-right whitespace-nowrap text-[10.5px]">
                       {actuals.cashIn[per.start] ? num2.format(actuals.cashIn[per.start]) : '—'}
                     </td>
@@ -658,12 +782,12 @@ export default function CashflowPage() {
                     </button>
                   ) : null}
                 </td>
-                <td colSpan={periods.length} />
+                <td colSpan={visible.periods.length} />
               </tr>
               {sectionRows(outgoingLines, 'outgoing')}
               <tr className="bg-paper-2 font-medium">
                 <td className="td-register sticky left-0 bg-paper-2 z-10">Total outgoings</td>
-                {totals.totalOutgoings.map((v, i) => (
+                {pick(totals.totalOutgoings).map((v, i) => (
                   <td key={i} className={cx('td-register figure text-right whitespace-nowrap', v < 0 && 'text-danger-ink')}>
                     {figure(v)}
                   </td>
@@ -672,7 +796,7 @@ export default function CashflowPage() {
               {actuals ? (
                 <tr className="text-stone-500">
                   <td className="td-register sticky left-0 bg-white z-10 text-[10.5px]">Xero actual cash out</td>
-                  {periods.map((per) => (
+                  {visible.periods.map((per) => (
                     <td key={per.start} className="td-register figure text-right whitespace-nowrap text-[10.5px]">
                       {actuals.cashOut[per.start] ? num2.format(actuals.cashOut[per.start]) : '—'}
                     </td>
@@ -682,7 +806,7 @@ export default function CashflowPage() {
 
               <tr className="border-t border-stone-200 font-medium">
                 <td className="td-register sticky left-0 bg-white z-10">Net movement</td>
-                {totals.netMovement.map((v, i) => (
+                {pick(totals.netMovement).map((v, i) => (
                   <td key={i} className={cx('td-register figure text-right whitespace-nowrap', v < 0 && 'text-danger-ink')}>
                     {figure(v)}
                   </td>
@@ -690,7 +814,7 @@ export default function CashflowPage() {
               </tr>
               <tr className="text-stone-600">
                 <td className="td-register sticky left-0 bg-white z-10">Balance b/fwd</td>
-                {totals.balanceBf.map((v, i) => (
+                {pick(totals.balanceBf).map((v, i) => (
                   <td key={i} className={cx('td-register figure text-right whitespace-nowrap', v < 0 && 'text-danger-ink')}>
                     {num2.format(v)}
                   </td>
@@ -698,7 +822,7 @@ export default function CashflowPage() {
               </tr>
               <tr className="bg-indigo text-paper font-medium">
                 <td className="px-4 py-2.5 sticky left-0 bg-indigo z-10 text-[11.5px]">Balance c/fwd</td>
-                {totals.balanceCf.map((v, i) => (
+                {pick(totals.balanceCf).map((v, i) => (
                   <td key={i} className={cx('px-4 py-2.5 figure text-right whitespace-nowrap text-[11.5px]', v < 0 && 'text-[#ffb3b3]')}>
                     {num2.format(v)}
                   </td>
@@ -710,9 +834,11 @@ export default function CashflowPage() {
       </Card>
 
       <p className="text-[11px] text-stone-500">
-        Shaded columns have ended — the ⚙ on a line maps it to Xero account codes and fills those columns with
-        the actual cash from the mirror (tinted green, still editable). The 'Xero actual cash in/out' rows show
-        the real bank movements per period for a sense-check against the forecast, whatever the line mapping.
+        The forecast starts at the week you are in and moves with the calendar — completed weeks fold away but
+        still carry the balance through, so the first column's b/fwd is the real position. The ⚙ on a line maps
+        it to Xero account codes and fills completed columns with the actual cash from the mirror (tinted green,
+        still editable). The 'Xero actual cash in/out' rows show the real bank movements per period for a
+        sense-check against the forecast, whatever the line mapping.
       </p>
     </div>
   )

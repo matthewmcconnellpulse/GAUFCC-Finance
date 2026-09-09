@@ -26,7 +26,13 @@ export interface CfPeriod {
   start: string // ISO date — the cell key
   endExclusive: string // ISO date, first day after the period
   label: string // 'W/C 02 Mar' or 'Jul 26'
+  /** Axis-length label — '02 Mar', 'Jul 26'. Full label stays for tooltips. */
+  shortLabel: string
   kind: 'week' | 'month'
+  /** The period has finished: it is history, not forecast. */
+  ended: boolean
+  /** The week we are in right now — where the forecast starts from. */
+  current: boolean
 }
 
 function iso(d: Date): string {
@@ -49,21 +55,65 @@ export function mondayOf(d: Date): Date {
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-export function buildPeriods(config: Pick<CashflowConfig, 'opening_date' | 'weekly_weeks' | 'monthly_months'>): CfPeriod[] {
+/**
+ * The grid's columns.
+ *
+ * The forecast follows the calendar rather than sitting where it was first
+ * set up: `weekly_weeks` counts forward from the week we are in NOW, so the
+ * current week is always the first forecast column and the horizon is always
+ * the full 13 weeks (or whatever is configured) rather than shrinking away as
+ * the weeks pass.
+ *
+ * Weeks between the opening date and today are still generated — they are the
+ * history the balance cascades through, so the current week's brought-forward
+ * figure is right — but they are marked `ended` and the grid folds them away
+ * by default. `opening_date` therefore stays what it says it is: the date the
+ * opening balance is stated at, an anchor of record, not a moving view.
+ */
+export function buildPeriods(
+  config: Pick<CashflowConfig, 'opening_date' | 'weekly_weeks' | 'monthly_months'>,
+  today: string = todayIso(),
+): CfPeriod[] {
   const periods: CfPeriod[] = []
-  const start = mondayOf(fromIso(config.opening_date))
-  let cursor = new Date(start)
-  for (let i = 0; i < config.weekly_weeks; i++) {
-    const end = new Date(cursor)
+  const anchor = mondayOf(fromIso(config.opening_date))
+  const thisWeek = mondayOf(fromIso(today))
+  const currentStart = iso(thisWeek < anchor ? anchor : thisWeek)
+
+  // History weeks (anchor → this week) plus weekly_weeks forward from now.
+  let cursor = new Date(anchor)
+  const week = (from: Date): { period: CfPeriod; end: Date } => {
+    const end = new Date(from)
     end.setDate(end.getDate() + 7)
-    periods.push({
-      start: iso(cursor),
-      endExclusive: iso(end),
-      label: `W/C ${String(cursor.getDate()).padStart(2, '0')} ${MONTHS_SHORT[cursor.getMonth()]}`,
-      kind: 'week',
-    })
+    const start = iso(from)
+    return {
+      period: {
+        start,
+        endExclusive: iso(end),
+        label: `W/C ${String(from.getDate()).padStart(2, '0')} ${MONTHS_SHORT[from.getMonth()]}`,
+        shortLabel: `${String(from.getDate()).padStart(2, '0')} ${MONTHS_SHORT[from.getMonth()]}`,
+        kind: 'week',
+        ended: iso(end) <= today,
+        current: start === currentStart,
+      },
+      end,
+    }
+  }
+  // Guard against a far-past opening date generating thousands of columns.
+  const MAX_HISTORY_WEEKS = 260
+  let guard = 0
+  while (iso(cursor) < currentStart && guard < MAX_HISTORY_WEEKS) {
+    const { period, end } = week(cursor)
+    periods.push(period)
+    cursor = end
+    guard += 1
+  }
+  cursor = new Date(fromIso(currentStart))
+  for (let i = 0; i < config.weekly_weeks; i++) {
+    const { period, end } = week(cursor)
+    periods.push(period)
     cursor = end
   }
+
   // Monthly columns pick up from the first day of the month AFTER the last
   // week ends (part-months are covered by the weekly columns).
   let month = new Date(cursor.getFullYear(), cursor.getMonth() + (cursor.getDate() > 1 ? 1 : 0), 1)
@@ -73,7 +123,10 @@ export function buildPeriods(config: Pick<CashflowConfig, 'opening_date' | 'week
       start: iso(month),
       endExclusive: iso(end),
       label: `${MONTHS_SHORT[month.getMonth()]} ${String(month.getFullYear()).slice(2)}`,
+      shortLabel: `${MONTHS_SHORT[month.getMonth()]} ${String(month.getFullYear()).slice(2)}`,
       kind: 'month',
+      ended: iso(end) <= today,
+      current: false,
     })
     month = end
   }
@@ -295,7 +348,7 @@ export function buildForecastCsv(opts: {
 }): string {
   const rows: string[][] = []
   rows.push(['GAUFCC — Cashflow forecast'])
-  rows.push(['Week beginning / Month', ...opts.periods.map((p) => p.label)])
+  rows.push(['Week commencing / Month', ...opts.periods.map((p) => p.label)])
   rows.push(['INCOME'])
   for (const l of opts.incomeLines) rows.push([l.name, ...l.values.map((v) => (v === 0 ? '' : v.toFixed(2)))])
   rows.push(['Total income', ...opts.totalIncome.map((v) => v.toFixed(2))])

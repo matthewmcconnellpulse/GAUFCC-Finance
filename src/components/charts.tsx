@@ -273,6 +273,7 @@ export function StackedColumnChart({
 
   const ticks = ticksFor(min, max)
 
+
   function onMove(e: React.MouseEvent<SVGSVGElement>) {
     const rect = svgRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -359,12 +360,19 @@ export function StackedColumnChart({
 
 export function MultiLineChart({
   labels,
+  tickLabels,
   series,
   ariaLabel,
+  markerIndex,
 }: {
+  /** One per point. Used in the tooltip, and on the axis unless tickLabels is given. */
   labels: string[]
+  /** Shorter axis-only labels — the full `labels` still show in the tooltip. */
+  tickLabels?: string[]
   series: ChartSeries[]
   ariaLabel: string
+  /** Draws a vertical rule at this point — 'you are here' on a forecast. */
+  markerIndex?: number
 }) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -396,6 +404,16 @@ export function MultiLineChart({
   const x = (i: number) => (n === 1 ? PAD_L + innerW / 2 : PAD_L + (i / (n - 1)) * innerW)
   const y = (v: number) => PAD_T + (1 - (v - min) / (max - min)) * innerH
   const ticks = ticksFor(min, max)
+
+  // Axis labels are thinned so they never collide: on the fixed 680px canvas
+  // with ~9.5px mono text there is only so much room, and 19 weekly columns of
+  // 'W/C 02 Mar' is what made the old axis unreadable. The first and last are
+  // always drawn; the stride is chosen so the last label never lands next to a
+  // thinned neighbour. Every point still names itself in full on hover.
+  const axisLabels = tickLabels ?? labels
+  const widest = axisLabels.reduce((w, l) => Math.max(w, l.length), 0)
+  const perLabel = Math.max(34, widest * 5.9 + 12)
+  const stride = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(innerW / perLabel))))
 
   function onMove(e: React.MouseEvent<SVGSVGElement>) {
     const rect = svgRef.current?.getBoundingClientRect()
@@ -450,19 +468,45 @@ export function MultiLineChart({
             </text>
           </g>
         ))}
-        {labels.map((l, i) => (
-          <text
-            key={l + i}
-            x={x(i)}
-            y={H - 8}
-            textAnchor={i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}
-            fontFamily={MONO}
-            fontSize="9.5"
-            fill={MUTED}
-          >
-            {l}
-          </text>
-        ))}
+        {axisLabels.map((l, i) =>
+          i === 0 || i === n - 1 || (i % stride === 0 && i <= n - 1 - stride) ? (
+            <text
+              key={l + i}
+              x={x(i)}
+              y={H - 8}
+              textAnchor={i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}
+              fontFamily={MONO}
+              fontSize="9.5"
+              fill={MUTED}
+            >
+              {l}
+            </text>
+          ) : null,
+        )}
+        {markerIndex !== undefined && markerIndex >= 0 && markerIndex < n ? (
+          <g>
+            <line
+              x1={x(markerIndex)}
+              x2={x(markerIndex)}
+              y1={PAD_T}
+              y2={H - PAD_B}
+              stroke={MUTED}
+              strokeOpacity="0.5"
+              strokeWidth="1"
+              strokeDasharray="3 3"
+            />
+            <text
+              x={x(markerIndex) + (markerIndex > n * 0.8 ? -4 : 4)}
+              y={PAD_T + 9}
+              fontFamily={MONO}
+              fontSize="8.5"
+              fill={MUTED}
+              textAnchor={markerIndex > n * 0.8 ? 'end' : 'start'}
+            >
+              now
+            </text>
+          </g>
+        ) : null}
         {tooltip ? (
           <line
             x1={x(tooltip.index)}
