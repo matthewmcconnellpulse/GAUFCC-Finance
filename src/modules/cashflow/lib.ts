@@ -328,6 +328,72 @@ export function lineActual(actuals: XeroCashActuals, codes: string[], periodStar
   return round2(total)
 }
 
+// ── Spreadsheet import (upload → parse-cashflow → preview → apply) ──────────
+
+export interface ParsedCashflowCell {
+  line_id: string
+  period_start: string
+  amount: number
+  source_row?: string
+  source_col?: string
+}
+
+export interface ParsedCashflow {
+  cells: ParsedCashflowCell[]
+  unmatched_rows: string[]
+  unmatched_columns: string[]
+  notes: string
+  /** Cells the function refused because the id or date was not one it was given. */
+  dropped: number
+}
+
+function safeFileName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'cashflow'
+}
+
+export const CASHFLOW_IMPORT_ACCEPT = '.xlsx,.xls,.xlsm,.csv,.tsv'
+
+/** Extensions parse-cashflow can read. Checked before the upload, not after. */
+export function isSupportedCashflowFile(name: string): boolean {
+  return /\.(xlsx|xls|xlsm|csv|tsv|txt)$/i.test(name)
+}
+
+export async function uploadCashflowFile(file: File): Promise<string> {
+  const path = `cashflow/${Date.now()}-${safeFileName(file.name)}`
+  const { error } = await supabase.storage.from('imports').upload(path, file, {
+    contentType: file.type || 'application/octet-stream',
+    upsert: false,
+  })
+  if (error) throw new Error(error.message)
+  return path
+}
+
+/**
+ * Write an accepted set of parsed cells. Chunked because a full 19-column
+ * grid across 20 lines is 380 rows and PostgREST is happier in bites; the
+ * note marks them 'import' so the grid can tint them like Xero fills.
+ */
+export async function applyParsedCells(
+  cells: ParsedCashflowCell[],
+  userId: string,
+): Promise<void> {
+  const CHUNK = 200
+  for (let i = 0; i < cells.length; i += CHUNK) {
+    const rows = cells.slice(i, i + CHUNK).map((c) => ({
+      line_id: c.line_id,
+      period_start: c.period_start,
+      amount: c.amount,
+      note: 'import',
+      updated_by: userId,
+      updated_at: new Date().toISOString(),
+    }))
+    const { error } = await supabase
+      .from('cashflow_cells')
+      .upsert(rows, { onConflict: 'line_id,period_start' })
+    if (error) throw new Error(error.message)
+  }
+}
+
 // ── CSV export (mirrors the template layout) ─────────────────────────────────
 
 function csvField(value: string | number): string {

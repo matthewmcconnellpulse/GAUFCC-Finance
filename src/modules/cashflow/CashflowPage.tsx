@@ -14,6 +14,7 @@ import { useAuth, usePermissions } from '@/auth/AuthProvider'
 import { Button, Card, ErrorNotice, Field, Input, LoadingRows, SectionLabel, cx } from '@/components/ui'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import { MultiLineChart, money0, type ChartSeries } from '@/components/charts'
+import { ImportPanel } from './ImportPanel'
 import type { CashflowConfig, CashflowLine } from '@/types/db'
 import {
   buildForecastCsv,
@@ -59,13 +60,14 @@ function parseAmountInput(raw: string): number | null {
 
 function CellEditor({
   value,
-  isXero,
+  filledFrom,
   section,
   canEdit,
   onCommit,
 }: {
   value: number
-  isXero: boolean
+  /** Where the figure came from, if not typed here — tints the cell. */
+  filledFrom: 'xero' | 'import' | null
   section: 'income' | 'outgoing'
   canEdit: boolean
   onCommit: (next: number) => void
@@ -112,9 +114,16 @@ function CellEditor({
       className={cx(
         'w-full text-right figure rounded px-1 py-0.5 hover:bg-indigo/[.06] cursor-text',
         value < 0 && 'text-danger-ink',
-        isXero && 'bg-mint/10',
+        filledFrom === 'xero' && 'bg-mint/10',
+        filledFrom === 'import' && 'bg-indigo/[.07]',
       )}
-      title={isXero ? 'Filled from Xero — click to override' : 'Click to edit'}
+      title={
+        filledFrom === 'xero'
+          ? 'Filled from Xero — click to override'
+          : filledFrom === 'import'
+            ? 'Imported from a spreadsheet — click to override'
+            : 'Click to edit'
+      }
     >
       {figure(value)}
     </button>
@@ -396,6 +405,9 @@ export default function CashflowPage() {
   const { profile } = useAuth()
   const p = usePermissions()
   const canEdit = p.isAdmin || p.isBookkeeper || p.isCeo
+  // The imports bucket is Pulse-only, so the spreadsheet import is too — the
+  // CEO can still type into any cell.
+  const canImport = p.isPulse
 
   const configQ = useSupabaseQuery(fetchConfig)
   const linesQ = useSupabaseQuery(fetchLines)
@@ -414,6 +426,8 @@ export default function CashflowPage() {
 
   const [editingLine, setEditingLine] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importedCount, setImportedCount] = useState<number | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Local overlay so cell edits render instantly without a refetch round-trip.
@@ -639,7 +653,7 @@ export default function CashflowPage() {
             >
               <CellEditor
                 value={cell?.amount ?? 0}
-                isXero={cell?.note === 'xero'}
+                filledFrom={cell?.note === 'xero' ? 'xero' : cell?.note === 'import' ? 'import' : null}
                 section={section}
                 canEdit={canEdit}
                 onCommit={(next) => void commitCell(l, per, next)}
@@ -665,6 +679,11 @@ export default function CashflowPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canImport ? (
+            <Button variant="ghost" onClick={() => setImportOpen((v) => !v)}>
+              {importOpen ? 'Close import' : 'Import spreadsheet'}
+            </Button>
+          ) : null}
           <Button variant="ghost" onClick={exportCsv}>
             Export CSV
           </Button>
@@ -673,6 +692,29 @@ export default function CashflowPage() {
 
       {configBar}
       {error ? <ErrorNotice message={error} /> : null}
+      {importedCount !== null ? (
+        <div className="rounded-card border border-mint-700/40 bg-mint/10 text-mint-900 text-[12.5px] px-4 py-3 flex items-center justify-between gap-2">
+          <span>
+            {importedCount} figure{importedCount === 1 ? '' : 's'} imported into the forecast. Imported cells are
+            tinted — click any of them to override.
+          </span>
+          <button onClick={() => setImportedCount(null)} className="underline underline-offset-2">
+            dismiss
+          </button>
+        </div>
+      ) : null}
+      {importOpen && canImport ? (
+        <ImportPanel
+          lines={lines}
+          periods={periods}
+          onClose={() => setImportOpen(false)}
+          onApplied={(n) => {
+            setImportedCount(n)
+            setOverrides(new Map())
+            cellsQ.refetch()
+          }}
+        />
+      ) : null}
       {settingsOpen && canEdit ? (
         <SettingsPanel
           config={config}
@@ -838,7 +880,8 @@ export default function CashflowPage() {
         still carry the balance through, so the first column's b/fwd is the real position. The ⚙ on a line maps
         it to Xero account codes and fills completed columns with the actual cash from the mirror (tinted green,
         still editable). The 'Xero actual cash in/out' rows show the real bank movements per period for a
-        sense-check against the forecast, whatever the line mapping.
+        sense-check against the forecast, whatever the line mapping. Cells tinted indigo came in from an
+        imported spreadsheet; both kinds stay editable.
       </p>
     </div>
   )
