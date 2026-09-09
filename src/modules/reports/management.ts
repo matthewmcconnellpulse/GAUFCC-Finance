@@ -207,6 +207,36 @@ export function compareToBudget(
   }
 }
 
+/**
+ * The annual operating budget implied by a Xero budget: a full financial
+ * year's budgeted expenditure.
+ *
+ * Only EXPENSE-class accounts count — the denominator of reserve coverage is
+ * what it costs to run the charity for a year, not the net of budgeted income
+ * and cost. Returns null when the budget carries no expenditure lines, so the
+ * caller falls back to the figure recorded on the platform rather than
+ * dividing by something meaningless.
+ */
+export async function annualOperatingBudgetFromXero(
+  budgetId: string,
+  financialYear: { start: string; end: string },
+): Promise<number | null> {
+  const [detail, accountRows] = await Promise.all([
+    fetchBudgetDetail(budgetId, { from: financialYear.start, to: financialYear.end }),
+    supabase.from('xero_accounts').select('code, class').eq('class', 'EXPENSE').limit(1000),
+  ])
+  if (accountRows.error) throw new Error(accountRows.error.message)
+  const expenseCodes = new Set(
+    ((accountRows.data ?? []) as Array<{ code: string | null }>)
+      .map((a) => a.code)
+      .filter((c): c is string => !!c),
+  )
+  const total = detail.accounts
+    .filter((a) => expenseCodes.has(a.code))
+    .reduce((s, a) => s + Math.abs(a.total), 0)
+  return total > 0 ? round2(total) : null
+}
+
 // ── Reserve coverage ────────────────────────────────────────────────────────
 
 export interface ReserveCoverage {

@@ -49,6 +49,7 @@ import PackDocument, {
 import { buildPackHtml, PACK_CSS } from './packCss'
 import type { ManagementData } from './ManagementPages'
 import {
+  annualOperatingBudgetFromXero,
   balanceSheetHeadlines,
   buildReserveCoverage,
   compareToBudget,
@@ -65,6 +66,7 @@ import {
   fetchTopMovements,
   monthKeysInPeriod,
   periodLabel,
+  presetRange,
   scopeDescription,
   trackingIdsForFunds,
   type BuilderState,
@@ -236,6 +238,20 @@ export default function PackBuilderPage({
     [managementSettings.data?.xeroBudgetId, managementSettings.data?.xeroPriorBudgetId, state.period.start, state.period.end],
   )
 
+  // Reserve coverage's denominator: a full financial year of budgeted
+  // expenditure, taken from the tracked Xero budget when there is one. The
+  // report period may be a month or a quarter, so this is deliberately read
+  // for the financial year rather than the period on screen.
+  const annualFromXero = useSupabaseQuery(
+    async () => {
+      const budgetId = managementSettings.data?.xeroBudgetId
+      if (!budgetId) return null
+      const fy = presetRange('fy', new Date(`${state.period.end}T00:00:00`))
+      return annualOperatingBudgetFromXero(budgetId, fy)
+    },
+    [managementSettings.data?.xeroBudgetId, state.period.end],
+  )
+
   const forecast = useSupabaseQuery(() => fetchPackForecast({ weeks: 13, months: 3 }), [])
 
   const management = useMemo<ManagementData>(() => {
@@ -253,7 +269,13 @@ export default function PackBuilderPage({
       budgetComparison = compareToBudget(actualByCode, budget.data.current, budget.data.prior)
     }
 
-    const annualBudget = managementSettings.data?.annualOperatingBudget ?? null
+    // The Xero budget is the better denominator when it is there — it is the
+    // figure the trustees approved. The typed setting is the fallback.
+    const fromXero = annualFromXero.data ?? null
+    const fromSetting = managementSettings.data?.annualOperatingBudget ?? null
+    const annualBudget = fromXero ?? fromSetting
+    const budgetSource: 'xero_budget' | 'setting' | null =
+      fromXero !== null ? 'xero_budget' : fromSetting !== null ? 'setting' : null
     return {
       pl,
       plError: managementPl.error ?? null,
@@ -276,7 +298,7 @@ export default function PackBuilderPage({
             balanceSheet: bsIndex,
             balanceSheetError: balanceSheet.error ?? null,
             annualBudget,
-            budgetSource: annualBudget === null ? null : 'setting',
+            budgetSource,
           })
         : null,
       forecast: forecast.data ?? null,
@@ -292,6 +314,7 @@ export default function PackBuilderPage({
     budget.data,
     budget.error,
     managementSettings.data,
+    annualFromXero.data,
     forecast.data,
     forecast.error,
     model,
@@ -594,9 +617,13 @@ export default function PackBuilderPage({
             />
             <SourceRow
               label="Reserve coverage"
-              detail="(General funds + cash at bank) ÷ annual operating budget"
-              loading={managementSettings.loading}
-              error={null}
+              detail={
+                management.coverage?.budgetSource === 'xero_budget'
+                  ? '(General funds + cash at bank) ÷ a year of budgeted expenditure from Xero'
+                  : '(General funds + cash at bank) ÷ annual operating budget'
+              }
+              loading={managementSettings.loading || annualFromXero.loading}
+              error={annualFromXero.error}
               ok={management.coverage?.months != null}
               okDetail={
                 management.coverage?.months != null

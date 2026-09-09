@@ -14,6 +14,7 @@ import { useSync } from '@/sync/SyncProvider'
 import type { SyncRun } from '@/types/db'
 import { fetchSyncRuns, fetchXeroConnection } from './lib'
 import { SectionCard } from './components'
+import BudgetSection from './BudgetSection'
 
 interface TestResult {
   ok: boolean
@@ -169,6 +170,9 @@ export default function XeroTab() {
           </div>
         )}
       </SectionCard>
+
+      {/* What the board pack tracks against */}
+      <BudgetSection />
     </div>
   )
 }
