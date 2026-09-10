@@ -20,36 +20,35 @@ interface NavSection {
 
 function useNavSections(): NavSection[] {
   const p = usePermissions()
-  const seesFinancials = p.isPulse || p.isCeo || p.isTrustee
   return [
     {
       label: null,
       items: [
         { to: '/', label: 'Dashboard', show: true },
-        { to: '/funds', label: 'Funds', show: p.isPulse || p.isCeo || p.isTrustee },
+        { to: '/funds', label: 'Funds', show: p.canSeeFunds },
         { to: '/reports', label: 'Reports', show: p.canSeeReports },
       ],
     },
     {
       label: 'Financials',
       items: [
-        { to: '/financials/profit-loss', label: 'Profit & Loss', show: seesFinancials },
-        { to: '/financials/balance-sheet', label: 'Balance Sheet', show: seesFinancials },
-        { to: '/financials/transactions', label: 'Transactions', show: seesFinancials },
+        { to: '/financials/profit-loss', label: 'Profit & Loss', show: p.canSeeFinancials },
+        { to: '/financials/balance-sheet', label: 'Balance Sheet', show: p.canSeeFinancials },
+        { to: '/financials/transactions', label: 'Transactions', show: p.canSeeFinancials },
         { to: '/financials/investments', label: 'Investments', show: p.isPulse || p.isCeo },
-        { to: '/financials/cashflow', label: 'Cash flow', show: p.isPulse || p.isCeo },
-        { to: '/reconciliation', label: 'Reconciliation', show: seesFinancials },
+        { to: '/financials/cashflow', label: 'Cash flow', show: p.canSeeCashflow },
+        { to: '/reconciliation', label: 'Reconciliation', show: p.canSeeFinancials },
       ],
     },
     {
       label: null,
       items: [
         { to: '/expenses', label: 'Expenses', show: true },
-        { to: '/month-end', label: 'Month end', show: p.isPulse || p.isCeo || p.isTrustee },
-        { to: '/people', label: 'People', show: p.isAdmin || p.isPayroll || p.isCeo },
-        { to: '/imports', label: 'Imports', show: p.isPulse },
-        { to: '/vat', label: 'VAT', show: p.isPulse || p.isCeo || p.isTrustee },
-        { to: '/projects', label: 'Projects', show: p.isPulse || p.isCeo },
+        { to: '/month-end', label: 'Month end', show: p.canSeeMonthEnd },
+        { to: '/people', label: 'People', show: p.canSeePeople },
+        { to: '/imports', label: 'Imports', show: p.canSeeImports },
+        { to: '/vat', label: 'VAT', show: p.canSeeVat },
+        { to: '/projects', label: 'Projects', show: p.canSeeProjects },
         { to: '/settings', label: 'Settings', show: p.isAdmin || p.isCeo },
       ],
     },

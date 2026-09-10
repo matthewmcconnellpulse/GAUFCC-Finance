@@ -21,12 +21,13 @@ import {
 import { formatDate, formatDateTime, timeAgo } from '@/lib/format'
 import { invokeFunction } from '@/lib/supabase'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
-import type { Fund, Organisation, Profile, Role, UserActivityRow } from '@/types/db'
+import type { Fund, ModuleKey, Organisation, Profile, Role, UserActivityRow } from '@/types/db'
 import {
   ALL_ROLES,
   deleteUser,
   fetchAllFunds,
   fetchFundManagers,
+  fetchProfileModules,
   fetchProfiles,
   fetchUserActivity,
   reissueLoginLink,
@@ -37,6 +38,7 @@ import {
   updateProfile,
 } from './lib'
 import { Modal, RoleChip, SectionCard, Toggle } from './components'
+import { ModuleAccessCard } from './ModuleAccessCard'
 
 export default function UsersTab() {
   const { isAdmin, isCeo } = usePermissions()
@@ -44,6 +46,7 @@ export default function UsersTab() {
   const profilesQuery = useSupabaseQuery(() => fetchProfiles(), [])
   const fundsQuery = useSupabaseQuery(() => fetchAllFunds(), [])
   const managersQuery = useSupabaseQuery(() => fetchFundManagers(), [])
+  const modulesQuery = useSupabaseQuery(() => fetchProfileModules(), [])
 
   const [inviteOpen, setInviteOpen] = useState(false)
   const [editUser, setEditUser] = useState<Profile | null>(null)
@@ -188,11 +191,19 @@ export default function UsersTab() {
       {editUser ? (
         <EditUserModal
           user={editUser}
+          grantedModules={(modulesQuery.data ?? [])
+            .filter((m) => m.profile_id === editUser.id)
+            .map((m) => m.module)}
+          managedFundCount={
+            (managersQuery.data ?? []).filter((m) => m.profile_id === editUser.id).length
+          }
           onClose={() => setEditUser(null)}
           onSaved={() => {
             setEditUser(null)
             profilesQuery.refetch()
+            modulesQuery.refetch()
           }}
+          onModulesSaved={() => modulesQuery.refetch()}
         />
       ) : null}
     </div>
@@ -305,12 +316,18 @@ function SignInHelp({ user }: { user: Profile }) {
 
 function EditUserModal({
   user,
+  grantedModules,
+  managedFundCount,
   onClose,
   onSaved,
+  onModulesSaved,
 }: {
   user: Profile
+  grantedModules: ModuleKey[]
+  managedFundCount: number
   onClose: () => void
   onSaved: () => void
+  onModulesSaved: () => void
 }) {
   const [fullName, setFullName] = useState(user.full_name)
   const [role, setRole] = useState<Role>(user.role)
@@ -395,6 +412,13 @@ function EditUserModal({
           Role changes take effect on their next page load and are audit-logged. Access follows the
           role immediately — no re-invite needed.
         </p>
+
+        <ModuleAccessCard
+          person={user}
+          granted={grantedModules}
+          managedFundCount={managedFundCount}
+          onSaved={onModulesSaved}
+        />
 
         {isSelf || user.role === 'pulse_admin' || !user.active ? null : (
           <SignInHelp user={user} />

@@ -1,8 +1,9 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { AuthProvider } from '@/auth/AuthProvider'
+import { AuthProvider, usePermissions } from '@/auth/AuthProvider'
 import { SyncProvider } from '@/sync/SyncProvider'
 import RequireAuth from '@/auth/RequireAuth'
+import RequireModule from '@/auth/RequireModule'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import AppShell from '@/layout/AppShell'
 import SignIn from '@/auth/SignIn'
@@ -48,6 +49,30 @@ function Page({ children }: { children: ReactNode }) {
   )
 }
 
+/**
+ * A page behind a module check. `pick` names the canSee… flag rather than
+ * taking a boolean, so the route table reads as the access rule itself and a
+ * new route cannot forget to consult permissions.
+ */
+function Guarded({
+  pick,
+  title,
+  children,
+}: {
+  pick: (p: ReturnType<typeof usePermissions>) => boolean
+  title: string
+  children: ReactNode
+}) {
+  const permissions = usePermissions()
+  return (
+    <Page>
+      <RequireModule allowed={pick(permissions)} title={title}>
+        {children}
+      </RequireModule>
+    </Page>
+  )
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -79,28 +104,28 @@ export default function App() {
               }
             >
               <Route index element={<Page><DashboardPage /></Page>} />
-              <Route path="funds" element={<Page><FundsPage /></Page>} />
-              <Route path="funds/integrity" element={<Page><IntegrityPage /></Page>} />
-              <Route path="reconciliation" element={<Page><ReconciliationPage /></Page>} />
-              <Route path="funds/:id" element={<Page><FundDetailPage /></Page>} />
-              <Route path="reports/*" element={<Page><ReportsPage /></Page>} />
+              <Route path="funds" element={<Guarded pick={(p) => p.canSeeFunds} title="the funds register"><FundsPage /></Guarded>} />
+              <Route path="funds/integrity" element={<Guarded pick={(p) => p.canSeeFunds} title="the data integrity checks"><IntegrityPage /></Guarded>} />
+              <Route path="reconciliation" element={<Guarded pick={(p) => p.canSeeFinancials} title="the reconciliation"><ReconciliationPage /></Guarded>} />
+              <Route path="funds/:id" element={<Guarded pick={(p) => p.canSeeFunds} title="fund pages"><FundDetailPage /></Guarded>} />
+              <Route path="reports/*" element={<Guarded pick={(p) => p.canSeeReports} title="reports and board packs"><ReportsPage /></Guarded>} />
               <Route path="financials" element={<Navigate to="/financials/profit-loss" replace />} />
-              <Route path="financials/profit-loss" element={<Page><ProfitLossPage /></Page>} />
-              <Route path="financials/balance-sheet" element={<Page><BalanceSheetPage /></Page>} />
-              <Route path="financials/transactions" element={<Page><TransactionsPage /></Page>} />
-              <Route path="financials/investments" element={<Page><InvestmentsPage /></Page>} />
-              <Route path="financials/cashflow" element={<Page><CashflowPage /></Page>} />
+              <Route path="financials/profit-loss" element={<Guarded pick={(p) => p.canSeeFinancials} title="the profit and loss"><ProfitLossPage /></Guarded>} />
+              <Route path="financials/balance-sheet" element={<Guarded pick={(p) => p.canSeeFinancials} title="the balance sheet"><BalanceSheetPage /></Guarded>} />
+              <Route path="financials/transactions" element={<Guarded pick={(p) => p.canSeeFinancials} title="the transaction register"><TransactionsPage /></Guarded>} />
+              <Route path="financials/investments" element={<Guarded pick={(p) => p.isPulse || p.isCeo} title="investments"><InvestmentsPage /></Guarded>} />
+              <Route path="financials/cashflow" element={<Guarded pick={(p) => p.canSeeCashflow} title="the cash flow forecast"><CashflowPage /></Guarded>} />
               <Route path="expenses" element={<Page><ExpensesPage /></Page>} />
               <Route path="expenses/approvals" element={<Page><ApprovalQueuePage /></Page>} />
               <Route path="expenses/report" element={<Page><ExpensesReportPage /></Page>} />
               <Route path="expenses/:id" element={<Page><ClaimDetailPage /></Page>} />
-              <Route path="month-end" element={<Page><MonthEndPage /></Page>} />
-              <Route path="people" element={<Page><PeoplePage /></Page>} />
-              <Route path="people/:id" element={<Page><PersonDetailPage /></Page>} />
-              <Route path="imports/*" element={<Page><ImportsPage /></Page>} />
-              <Route path="vat" element={<Page><VatPage /></Page>} />
-              <Route path="projects" element={<Page><ProjectsPage /></Page>} />
-              <Route path="settings/*" element={<Page><SettingsPage /></Page>} />
+              <Route path="month-end" element={<Guarded pick={(p) => p.canSeeMonthEnd} title="the month end close"><MonthEndPage /></Guarded>} />
+              <Route path="people" element={<Guarded pick={(p) => p.canSeePeople} title="people records"><PeoplePage /></Guarded>} />
+              <Route path="people/:id" element={<Guarded pick={(p) => p.canSeePeople} title="people records"><PersonDetailPage /></Guarded>} />
+              <Route path="imports/*" element={<Guarded pick={(p) => p.canSeeImports} title="imports"><ImportsPage /></Guarded>} />
+              <Route path="vat" element={<Guarded pick={(p) => p.canSeeVat} title="the VAT workings"><VatPage /></Guarded>} />
+              <Route path="projects" element={<Guarded pick={(p) => p.canSeeProjects} title="projects"><ProjectsPage /></Guarded>} />
+              <Route path="settings/*" element={<Guarded pick={(p) => p.canEditSettings} title="settings"><SettingsPage /></Guarded>} />
               <Route
                 path="*"
                 element={

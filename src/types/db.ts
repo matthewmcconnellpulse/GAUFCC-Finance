@@ -207,6 +207,64 @@ export interface Fund {
   updated_at: string
 }
 
+/**
+ * The parts of the system a named user can be granted access to, on top of
+ * whatever their role already allows. Mirrors the check constraint on
+ * public.profile_modules — keep the two in step.
+ *
+ * 'settings' is deliberately absent and must stay absent: Settings is where
+ * roles and grants are administered, so a grant that opened it would let one
+ * grant escalate into every other grant.
+ */
+export const MODULE_KEYS = [
+  'funds',
+  'reports',
+  'expenses',
+  'financials',
+  'cashflow',
+  'month_end',
+  'vat',
+  'projects',
+  'people',
+  'imports',
+] as const
+
+export type ModuleKey = (typeof MODULE_KEYS)[number]
+
+export const MODULE_LABELS: Record<ModuleKey, string> = {
+  funds: 'Funds',
+  reports: 'Reports and board packs',
+  expenses: 'Expenses',
+  financials: 'Financials',
+  cashflow: 'Cash flow',
+  month_end: 'Month end',
+  vat: 'VAT',
+  projects: 'Projects',
+  people: 'People',
+  imports: 'Imports',
+}
+
+/** What the grant actually opens, in the words of someone assigning it. */
+export const MODULE_HINTS: Record<ModuleKey, string> = {
+  funds: 'The funds register and fund pages — limited to the funds this person is named responsible for',
+  reports: 'The report builder and board packs, on the funds they can already see',
+  expenses: 'Expense claims that spend the funds they are responsible for, alongside their own claims',
+  financials: 'Profit & loss, balance sheet and the transaction register',
+  cashflow: 'The weekly cash flow forecast',
+  month_end: 'The month end close checklist',
+  vat: 'The VAT and partial exemption workings',
+  projects: 'The delivery plan',
+  people: 'Staff and volunteer records',
+  imports: 'Bank and investment statement imports',
+}
+
+export interface ProfileModule {
+  profile_id: string
+  module: ModuleKey
+  granted_by: string | null
+  granted_at: string
+}
+
 export interface FundNote {
   id: string
   fund_id: string

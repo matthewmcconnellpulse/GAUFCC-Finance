@@ -7,7 +7,9 @@ import { invokeFunction, supabase } from '@/lib/supabase'
 import type { AuditLogEntry,
   Fund,
   FundManager,
+  ModuleKey,
   Profile,
+  ProfileModule,
   Role,
   Setting,
   SyncRun,
@@ -179,6 +181,43 @@ export async function saveFundManagerAssignments(
 }
 
 // ── Funds (classification queue + assignment picker) ─────────────────────────
+
+// ── Module grants ────────────────────────────────────────────────────────────
+
+/** Every grant, so the users tab can show each person's access at a glance. */
+export async function fetchProfileModules(): Promise<ProfileModule[]> {
+  const { data, error } = await supabase
+    .from('profile_modules')
+    .select('*')
+    .order('module', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as ProfileModule[]
+}
+
+/**
+ * Replace one person's grants with exactly this set.
+ *
+ * Delete-then-insert rather than a diff: the set is small, the operation is
+ * "this is what they have access to now", and a diff has two ways to be wrong
+ * where a replace has none. Both halves are audit-logged by the table trigger,
+ * so a removal leaves a trail as clearly as a grant.
+ */
+export async function saveProfileModules(
+  profileId: string,
+  modules: ModuleKey[],
+  grantedBy: string,
+): Promise<void> {
+  const { error: clearError } = await supabase
+    .from('profile_modules')
+    .delete()
+    .eq('profile_id', profileId)
+  if (clearError) throw new Error(clearError.message)
+  if (modules.length === 0) return
+  const { error } = await supabase.from('profile_modules').insert(
+    modules.map((module) => ({ profile_id: profileId, module, granted_by: grantedBy })),
+  )
+  if (error) throw new Error(error.message)
+}
 
 export async function fetchAllFunds(): Promise<Fund[]> {
   const { data, error } = await supabase.from('funds').select('*').order('name')
