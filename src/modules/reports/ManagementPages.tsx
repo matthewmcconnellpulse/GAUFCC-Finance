@@ -8,12 +8,12 @@
  * The profit and loss is presented as a statement of financial activities on
  * SORP headings rather than replaying Xero's trading layout, which is both
  * what a charity's trustees should be reading and how gross profit and its
- * margin stay off the page. Debtor days and creditor days are likewise absent
- * by design: the ageing pages show the actual balances and how overdue they
- * are, which is what a decision gets made on.
+ * margin stay off the page. Average-days ratios are likewise absent by
+ * design: the ageing pages show the actual balances and how overdue they are,
+ * which is what a decision gets made on.
  *
  * Any page whose source could not be read says so on the page. A board pack
- * that silently omits the debtors is worse than one that states it could not
+ * that silently omits the receivables is worse than one that states it could not
  * reach Xero.
  */
 import type { ReactNode } from 'react'
@@ -351,7 +351,7 @@ function flattenReportRows(report: XeroReport | null, limit = 48): FlatRow[] {
   return out
 }
 
-// ── Debtors and creditors ───────────────────────────────────────────────────
+// ── Receivables and payables ────────────────────────────────────────────────
 
 export function AgedPage({
   data,
@@ -365,8 +365,8 @@ export function AgedPage({
   footer: ReactNode
 }) {
   const aged = data.aged
-  const isDebtors = side === 'receivables'
-  const title = isDebtors ? 'Debtors' : 'Creditors'
+  const isReceivables = side === 'receivables'
+  const title = isReceivables ? 'Receivables' : 'Payables'
   const analysis: AgedSide | null = aged ? aged[side] : null
 
   return (
@@ -383,14 +383,14 @@ export function AgedPage({
         />
       ) : analysis.invoice_count === 0 ? (
         <div className="pk-lede" style={{ marginTop: 18 }}>
-          Nothing is outstanding. {isDebtors ? 'No sales invoices are' : 'No bills are'} unpaid at this date.
+          Nothing is outstanding. {isReceivables ? 'No sales invoices are' : 'No bills are'} unpaid at this date.
         </div>
       ) : (
         <>
           <div className="pk-lede" style={{ marginTop: 14, maxWidth: 560 }}>
             {compactMoney(analysis.total)} outstanding across {analysis.invoice_count} invoice
             {analysis.invoice_count === 1 ? '' : 's'} and {analysis.contact_count}{' '}
-            {isDebtors ? 'customer' : 'supplier'}
+            {isReceivables ? 'customer' : 'supplier'}
             {analysis.contact_count === 1 ? '' : 's'}
             {analysis.oldest_days > 0
               ? `, the oldest ${analysis.oldest_days} day${analysis.oldest_days === 1 ? '' : 's'} past its due date`
@@ -401,7 +401,7 @@ export function AgedPage({
           <table className="pk-table" style={{ marginTop: 20 }}>
             <thead>
               <tr>
-                <th>{isDebtors ? 'Customer' : 'Supplier'}</th>
+                <th>{isReceivables ? 'Customer' : 'Supplier'}</th>
                 {(aged?.buckets ?? []).map((b) => (
                   <th key={b.key} className="pk-num">
                     {b.label}
@@ -426,7 +426,7 @@ export function AgedPage({
                 <tr className="pk-subtotal">
                   <td>
                     {analysis.contacts.length - 16} further{' '}
-                    {isDebtors ? 'customers' : 'suppliers'}
+                    {isReceivables ? 'customers' : 'suppliers'}
                   </td>
                   {(aged?.buckets ?? []).map((b) => (
                     <td key={b.key} className="pk-num" style={{ color: '#b3afa3' }}>
@@ -455,8 +455,8 @@ export function AgedPage({
           <div className="pk-footnote" style={{ maxWidth: 560, marginTop: 'auto' }}>
             Read live from Xero at the time this pack was prepared, so it reflects the position on the day
             rather than the last overnight sync. Buckets are days past the invoice due date. Ageing is shown as
-            balances rather than as {isDebtors ? 'debtor' : 'creditor'} days, which is what a chase or a payment
-            run is actually decided on.
+            balances rather than as an average-days ratio, which is what a chase or a payment run is
+            actually decided on.
           </div>
         </>
       )}
@@ -773,12 +773,11 @@ export function ForecastPage({
 /**
  * The charts worth a page: how income and expenditure ran month by month,
  * how the funds split between restricted and unrestricted, and the shape of
- * the debtor and creditor books by age.
+ * the receivable and payable books by age.
  *
- * Debtors and creditors get a chart each rather than sharing one with two
- * scales, and there is no gross profit margin, debtor-days or creditor-days
- * ratio anywhere — balances by age are what a chase or a payment run gets
- * decided on.
+ * Receivables and payables get a chart each rather than sharing one with two
+ * scales, and there is no gross profit margin or average-days ratio anywhere —
+ * balances by age are what a chase or a payment run gets decided on.
  */
 export function ChartsPage({
   data,
@@ -851,7 +850,7 @@ export function ChartsPage({
       <div style={{ marginTop: 26, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 26 }}>
         <div>
           <div className="pk-kicker" style={{ marginBottom: 8 }}>
-            Debtors by age
+            Receivables by age
           </div>
           {aged && aged.receivables.invoice_count > 0 ? (
             <AgeBars data={bucketData('receivables')} tone="indigo" width={300} responsive={false} />
@@ -863,7 +862,7 @@ export function ChartsPage({
         </div>
         <div>
           <div className="pk-kicker" style={{ marginBottom: 8 }}>
-            Creditors by age
+            Payables by age
           </div>
           {aged && aged.payables.invoice_count > 0 ? (
             <AgeBars data={bucketData('payables')} tone="crimson" width={300} responsive={false} />

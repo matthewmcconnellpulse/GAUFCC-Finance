@@ -556,7 +556,7 @@ export default function PackBuilderPage({
         <Card className="px-5 py-4">
           <SectionLabel>Whole-charity management reports</SectionLabel>
           <p className="text-[12px] text-stone-500 mb-3">
-            These pages sit above the fund reports. The balance sheet, debtors, creditors and budget are read
+            These pages sit above the fund reports. The balance sheet, receivables, payables and budget are read
             live from Xero when the pack is assembled — anything that could not be read says so on its own page
             rather than being dropped, so you can decide whether to issue the pack or fix the source first.
           </p>
@@ -586,7 +586,7 @@ export default function PackBuilderPage({
               }
             />
             <SourceRow
-              label="Debtors and creditors"
+              label="Receivables and payables"
               detail="Outstanding invoices, live from Xero"
               loading={aged.loading}
               error={aged.error}
@@ -733,7 +733,7 @@ export default function PackBuilderPage({
           <ul className="text-[12.5px] text-stone-700 space-y-1.5">
             <li>Cover — {PACK_CONCEPTS.find((c) => c.value === concept)?.label}, contents, executive summary</li>
             <li>
-              Whole-charity management reports — income and expenditure, balance sheet, debtors, creditors,
+              Whole-charity management reports — income and expenditure, balance sheet, receivables, payables,
               budget, cash flow forecast, reserves and coverage, and the period in charts
             </li>
             <li>Charity-level financials — movements by fund, waterfall and reserves split</li>

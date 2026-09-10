@@ -422,16 +422,26 @@ export const CURRENT_EARNINGS_ALIASES = [
 
 export const TOTAL_ASSETS_ALIASES = ['Total Assets', 'Total assets']
 export const TOTAL_LIABILITIES_ALIASES = ['Total Liabilities', 'Total liabilities']
+/**
+ * These are XERO's own balance-sheet row labels, not our wording, so they keep
+ * the older "debtors"/"creditors" spellings deliberately: the app calls these
+ * receivables and payables everywhere it speaks for itself, but it still has
+ * to recognise whatever the chart of accounts happens to call them.
+ */
 export const RECEIVABLES_ALIASES = [
   'Accounts Receivable',
   'Trade Debtors',
   'Debtors',
+  'Trade Receivables',
+  'Receivables',
   'Total Accounts Receivable',
 ]
 export const PAYABLES_ALIASES = [
   'Accounts Payable',
   'Trade Creditors',
   'Creditors',
+  'Trade Payables',
+  'Payables',
   'Total Accounts Payable',
 ]
 export const CASH_ALIASES = ['Total Bank', 'Cash at bank and in hand', 'Cash and cash equivalents']

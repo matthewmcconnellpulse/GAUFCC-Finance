@@ -795,7 +795,7 @@ function BalanceSheetTable({ rows }: { rows: BalanceSheetRow[] }) {
       ))}
       <p className="text-[10.5px] text-stone-500 mt-3 leading-relaxed">
         Movements in the period on asset, liability and equity accounts coded to this fund — investment
-        purchases and sales, transfers, debtors and creditors. These do not form part of income and
+        purchases and sales, transfers, receivables and payables. These do not form part of income and
         expenditure and do not change the fund balance.
       </p>
     </div>

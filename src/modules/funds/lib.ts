@@ -197,7 +197,7 @@ export interface PlSummary {
   expenditure: PlRow[]
   /**
    * Lines coded to ASSET / LIABILITY / EQUITY accounts tagged with the fund —
-   * investment purchases and sales, transfers, debtors, creditors. They never
+   * investment purchases and sales, transfers, receivables, payables. They never
    * move the fund balance (v_fund_balances counts REVENUE and EXPENSE only) so
    * they must not be shown as income or expenditure.
    */

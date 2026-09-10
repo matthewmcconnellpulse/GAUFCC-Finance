@@ -11,7 +11,7 @@
  * - Balance sheet: read live from Xero. The mirror holds no journal-level data
  *   and cannot produce a complete balance sheet, so it is rendered as Xero
  *   gives it rather than re-derived.
- * - Debtors and creditors: read live from Xero via xero-aged. Nothing in the
+ * - Receivables and payables: read live from Xero via xero-aged. Nothing in the
  *   mirror distinguishes settled from outstanding.
  * - Budget: read live from Xero via xero-budgets, which needs the
  *   accounting.budgets.read scope on the connection.
@@ -36,7 +36,7 @@ import {
 } from '@/modules/recon/lib'
 import type { ReportModel } from './lib'
 
-// ── Aged debtors and creditors ──────────────────────────────────────────────
+// ── Aged receivables and payables ───────────────────────────────────────────
 
 export type AgedBucketKey = 'current' | 'days_1_30' | 'days_31_60' | 'days_61_90' | 'days_90_plus'
 

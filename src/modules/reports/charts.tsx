@@ -426,7 +426,7 @@ export function IncomeExpenditureLegend() {
 }
 
 // ── Ageing bars (one series, ordered buckets) ────────────────────────────────
-// Debtors and creditors get a chart each rather than sharing one with two
+// Receivables and payables get a chart each rather than sharing one with two
 // scales. Buckets are ordered oldest-last, so the shape reads left to right.
 
 export function AgeBars({

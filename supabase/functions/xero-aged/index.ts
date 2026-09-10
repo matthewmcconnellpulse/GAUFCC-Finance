@@ -1,5 +1,5 @@
 /**
- * xero-aged — aged debtors and creditors, live from Xero.
+ * xero-aged — aged receivables and payables, live from Xero.
  *
  * JWT-verified; roles pulse_*, ceo, trustee — the same audience as the other
  * statutory-style reports.
@@ -9,7 +9,7 @@
  * so it cannot tell settled from outstanding — there is nothing in it to age.
  * Xero's Invoices endpoint carries AmountDue and DueDate per invoice, which is
  * exactly what ageing needs, and reading it on demand means a pack is never
- * issued against a stale debtor position.
+ * issued against a stale receivables position.
  *
  * Body { as_at?: 'YYYY-MM-DD' } (defaults to today).
  * Returns { as_at, receivables, payables } where each side is
@@ -214,7 +214,7 @@ Deno.serve(async (req) => {
       )
     }
     console.error('[xero-aged]', message)
-    return errorResponse(`Aged debtors and creditors could not be read from Xero: ${message}`, 502)
+    return errorResponse(`Aged receivables and payables could not be read from Xero: ${message}`, 502)
   }
 
   return json({

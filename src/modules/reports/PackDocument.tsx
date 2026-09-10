@@ -179,9 +179,9 @@ export default function PackDocument(props: PackInputs) {
   page += 1
   const balanceSheetPage = page
   page += 1
-  const debtorsPage = page
+  const receivablesPage = page
   page += 1
-  const creditorsPage = page
+  const payablesPage = page
   page += 1
   const budgetPage = page
   page += 1
@@ -208,8 +208,8 @@ export default function PackDocument(props: PackInputs) {
     { title: 'Executive summary', sub: 'The period in brief, with commentary', page: execPage },
     { title: 'Income and expenditure', sub: 'Whole charity, on SORP headings', page: managementPlPage },
     { title: 'Balance sheet', sub: 'Whole charity, as reported by Xero', page: balanceSheetPage },
-    { title: 'Debtors', sub: 'Outstanding sales invoices by age', page: debtorsPage },
-    { title: 'Creditors', sub: 'Outstanding bills by age', page: creditorsPage },
+    { title: 'Receivables', sub: 'Outstanding sales invoices by age', page: receivablesPage },
+    { title: 'Payables', sub: 'Outstanding bills by age', page: payablesPage },
     { title: 'Against budget', sub: 'This year and last year’s budget', page: budgetPage },
     { title: 'Cash flow forecast', sub: 'From the current week forward', page: forecastPage },
     { title: 'Reserves and coverage', sub: 'Free reserves against annual operating cost', page: reservesPage },
@@ -256,14 +256,14 @@ export default function PackDocument(props: PackInputs) {
       <AgedPage
         data={props.management}
         side="receivables"
-        pageNum={debtorsPage}
-        footer={footer(debtorsPage)}
+        pageNum={receivablesPage}
+        footer={footer(receivablesPage)}
       />
       <AgedPage
         data={props.management}
         side="payables"
-        pageNum={creditorsPage}
-        footer={footer(creditorsPage)}
+        pageNum={payablesPage}
+        footer={footer(payablesPage)}
       />
       <BudgetPage
         data={props.management}
