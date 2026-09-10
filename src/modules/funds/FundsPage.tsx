@@ -24,15 +24,22 @@ import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import type { FundType } from '@/types/db'
 import { Segmented } from './components'
 import {
+  ATTENTION_HINTS,
+  ATTENTION_LABELS,
   FUND_TYPE_ACCENTS,
   FUND_TYPE_BLURBS,
   FUND_TYPE_ORDER,
   FUND_TYPE_ROW_ACCENTS,
   fetchFundBalances,
+  fetchFundManagerCounts,
   fetchFundMonthly,
+  fetchOpenFundWarnings,
+  fundAttention,
+  groupWarningsByFund,
   isoDate,
   lastMonthKeys,
   sparklineByFund,
+  type AttentionKey,
   type VFundBalance,
 } from './lib'
 
@@ -104,11 +111,15 @@ const TYPE_LABELS: Record<FundType, string> = {
 
 export default function FundsPage() {
   const navigate = useNavigate()
-  const { isPulse, isTrustee } = usePermissions()
+  const { isPulse, isCeo, isTrustee } = usePermissions()
   const [view, setView] = useState<ViewMode>('register')
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [search, setSearch] = useState('')
   const [showDormant, setShowDormant] = useState(false)
+  // Which attention reasons are selected. Empty = no attention filter. More
+  // than one narrows to funds matching ALL of them, which is how you find
+  // "in deficit AND nobody responsible".
+  const [attention, setAttention] = useState<Set<AttentionKey>>(new Set())
   // Balance, largest first — the order the register has always opened in.
   const [sort, setSort] = useState<SortState>({ key: 'balance', dir: 'desc' })
 
@@ -121,6 +132,14 @@ export default function FundsPage() {
   }
 
   const balances = useSupabaseQuery(fetchFundBalances, [])
+  const warningsQ = useSupabaseQuery(fetchOpenFundWarnings, [])
+  // fund_managers RLS shows a trustee only their own rows, so asking as a
+  // trustee would make every other fund look unowned. Don't ask.
+  const canSeeOwnership = isPulse || isCeo
+  const managersQ = useSupabaseQuery(
+    () => (canSeeOwnership ? fetchFundManagerCounts() : Promise.resolve(null)),
+    [canSeeOwnership],
+  )
   const trendMonths = useMemo(() => lastMonthKeys(12), [])
   const monthly = useSupabaseQuery(() => {
     const now = new Date()
@@ -133,7 +152,23 @@ export default function FundsPage() {
   )
 
   const funds = balances.data ?? []
-  const visible = useMemo(() => {
+
+  const warningsByFund = useMemo(
+    () => groupWarningsByFund(warningsQ.data ?? []),
+    [warningsQ.data],
+  )
+  const attentionByFund = useMemo(() => {
+    const map = new Map<string, Set<AttentionKey>>()
+    for (const f of funds) {
+      map.set(f.fund_id, fundAttention(f, warningsByFund, managersQ.data ?? null))
+    }
+    return map
+  }, [funds, warningsByFund, managersQ.data])
+
+  // Type, search and dormant filters only — the counts on the attention chips
+  // are taken from this, so each chip says how many funds it would show rather
+  // than how many exist overall.
+  const inScope = useMemo(() => {
     const q = search.trim().toLowerCase()
     return funds.filter((f) => {
       if (typeFilter === 'all') {
@@ -145,6 +180,54 @@ export default function FundsPage() {
       return true
     })
   }, [funds, typeFilter, search, showDormant])
+
+  const attentionCounts = useMemo(() => {
+    const counts = new Map<AttentionKey, number>()
+    for (const f of inScope) {
+      for (const key of attentionByFund.get(f.fund_id) ?? []) {
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+      }
+    }
+    return counts
+  }, [inScope, attentionByFund])
+
+  // Chips are offered only where something can match, so the row does not fill
+  // with reasons that never apply to this charity's funds.
+  const attentionOptions = useMemo(() => {
+    const order: AttentionKey[] = [
+      'any',
+      'serious',
+      'deficit',
+      'dormancy',
+      'min_balance',
+      'unusual_movement',
+      'unowned',
+      'unclassified',
+    ]
+    return order.filter((key) => {
+      if (key === 'unclassified' && !isPulse) return false
+      return (attentionCounts.get(key) ?? 0) > 0 || attention.has(key)
+    })
+  }, [attentionCounts, attention, isPulse])
+
+  const visible = useMemo(() => {
+    if (attention.size === 0) return inScope
+    return inScope.filter((f) => {
+      const keys = attentionByFund.get(f.fund_id)
+      if (!keys) return false
+      for (const wanted of attention) if (!keys.has(wanted)) return false
+      return true
+    })
+  }, [inScope, attention, attentionByFund])
+
+  function toggleAttention(key: AttentionKey) {
+    setAttention((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   // Sorted here rather than inside the register so the cards view orders
   // within its groups the same way.
@@ -272,15 +355,85 @@ export default function FundsPage() {
         </div>
       </div>
 
+      {/* Needs attention — filter by what actually triggered */}
+      {attentionOptions.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 mb-4 -mt-1">
+          <span className="text-[10.5px] font-medium uppercase tracking-[.12em] text-stone-500">
+            Needs attention
+          </span>
+          {attentionOptions.map((key) => {
+            const count = attentionCounts.get(key) ?? 0
+            const on = attention.has(key)
+            const serious = key === 'serious' || key === 'deficit'
+            return (
+              <button
+                key={key}
+                onClick={() => toggleAttention(key)}
+                aria-pressed={on}
+                title={ATTENTION_HINTS[key]}
+                className={cx(
+                  'inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11.5px] font-medium transition-colors',
+                  on
+                    ? serious
+                      ? 'bg-danger-ink text-paper border-danger-ink'
+                      : 'bg-indigo text-paper border-indigo'
+                    : serious
+                      ? 'bg-white text-danger-ink border-danger/40 hover:border-danger-ink'
+                      : 'bg-white text-stone-500 border-stone-300 hover:text-indigo',
+                )}
+              >
+                {ATTENTION_LABELS[key]}
+                <span
+                  className={cx(
+                    'font-mono text-[10px] rounded-full px-1.5',
+                    on ? 'bg-white/20' : 'bg-stone-150 text-stone-500',
+                  )}
+                >
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+          {attention.size > 0 ? (
+            <button
+              onClick={() => setAttention(new Set())}
+              className="text-[11.5px] text-stone-500 hover:text-indigo underline underline-offset-2"
+            >
+              clear
+            </button>
+          ) : null}
+          {attention.size > 1 ? (
+            <span className="text-[11px] text-stone-500">
+              showing funds matching all {attention.size} reasons
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       {visible.length === 0 ? (
         <Card>
-          <EmptyState title="No funds match" hint="Try a different filter or clear the search." />
+          <EmptyState
+            title="No funds match"
+            hint={
+              attention.size > 0
+                ? 'No fund has every reason you have selected. Try one reason at a time.'
+                : 'Try a different filter or clear the search.'
+            }
+            action={
+              attention.size > 0 ? (
+                <Button variant="ghost" onClick={() => setAttention(new Set())}>
+                  Clear the attention filter
+                </Button>
+              ) : undefined
+            }
+          />
         </Card>
       ) : view === 'register' ? (
         <RegisterView
           funds={sorted}
           sparklines={sparklines}
           isPulse={isPulse}
+          attentionByFund={attentionByFund}
           sort={sort}
           onSort={toggleSort}
           onOpen={(id) => navigate(`/funds/${id}`)}
@@ -293,6 +446,20 @@ export default function FundsPage() {
 }
 
 // ── Register (1d) ────────────────────────────────────────────────────────────
+
+/**
+ * Reasons worth a chip on the row, worst first. 'any' and 'serious' are
+ * roll-ups used by the filter and would only repeat what the specific reasons
+ * already say, so they are left out here.
+ */
+const REASON_CHIP_ORDER: AttentionKey[] = [
+  'deficit',
+  'min_balance',
+  'unusual_movement',
+  'dormancy',
+  'unowned',
+  'unclassified',
+]
 
 /**
  * A sortable column heading.
@@ -345,6 +512,7 @@ function RegisterView({
   funds,
   sparklines,
   isPulse,
+  attentionByFund,
   sort,
   onSort,
   onOpen,
@@ -352,6 +520,7 @@ function RegisterView({
   funds: VFundBalance[]
   sparklines: Map<string, number[]>
   isPulse: boolean
+  attentionByFund: Map<string, Set<AttentionKey>>
   sort: SortState
   onSort: (key: SortKey) => void
   onOpen: (id: string) => void
@@ -390,14 +559,24 @@ function RegisterView({
                   >
                     <div className="font-medium text-[13px] text-ink">{f.name}</div>
                     <div className="flex flex-wrap gap-1.5 mt-1 empty:hidden">
-                      {f.open_warning_count > 0 ? (
-                        <WarningBadge>
-                          {f.open_warning_count === 1 ? '1 warning' : `${f.open_warning_count} warnings`}
-                        </WarningBadge>
-                      ) : null}
-                      {isPulse && f.classified_at === null ? (
-                        <StatusChip tone="warn">Unclassified</StatusChip>
-                      ) : null}
+                      {/* Named reasons rather than a bare count — "1 warning"
+                          tells nobody what to do about it. */}
+                      {REASON_CHIP_ORDER.filter(
+                        (key) =>
+                          attentionByFund.get(f.fund_id)?.has(key) &&
+                          // Classification is Pulse's own housekeeping, not
+                          // something to show a trustee.
+                          (key !== 'unclassified' || isPulse),
+                      ).map(
+                        (key) =>
+                          key === 'deficit' || key === 'min_balance' ? (
+                            <WarningBadge key={key}>{ATTENTION_LABELS[key]}</WarningBadge>
+                          ) : (
+                            <StatusChip key={key} tone={key === 'unclassified' ? 'warn' : 'neutral'}>
+                              {ATTENTION_LABELS[key]}
+                            </StatusChip>
+                          ),
+                      )}
                     </div>
                   </td>
                   <td className="td-register">

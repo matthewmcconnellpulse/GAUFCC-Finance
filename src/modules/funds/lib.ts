@@ -85,6 +85,114 @@ export async function fetchFundBalances(): Promise<VFundBalance[]> {
   return (data ?? []) as VFundBalance[]
 }
 
+/**
+ * Open warnings for every fund the caller can see, so the register can filter
+ * by what actually triggered. Read as rows rather than counts because "which
+ * funds are in deficit" and "which have gone quiet" are different questions
+ * and the count cannot answer either.
+ */
+export async function fetchOpenFundWarnings(): Promise<FundWarning[]> {
+  const { data, error } = await supabase
+    .from('fund_warnings')
+    .select('*')
+    .is('resolved_at', null)
+    .order('as_of', { ascending: false })
+    .limit(2000)
+  if (error) throw new Error(error.message)
+  return (data ?? []) as FundWarning[]
+}
+
+/**
+ * How many people are named responsible for each fund.
+ *
+ * Only meaningful for Pulse and the CEO: fund_managers RLS lets a trustee read
+ * their OWN assignments only, so a trustee would see nought for every fund
+ * they do not manage and conclude nobody owns it. The caller decides whether
+ * to ask — see canSeeOwnership on the funds page.
+ */
+export async function fetchFundManagerCounts(): Promise<Map<string, number>> {
+  const { data, error } = await supabase.from('fund_managers').select('fund_id').limit(5000)
+  if (error) throw new Error(error.message)
+  const counts = new Map<string, number>()
+  for (const row of (data ?? []) as Array<{ fund_id: string }>) {
+    counts.set(row.fund_id, (counts.get(row.fund_id) ?? 0) + 1)
+  }
+  return counts
+}
+
+// ── Needs-attention filters ──────────────────────────────────────────────────
+
+/**
+ * The reasons a fund needs someone to look at it.
+ *
+ * The four warning rules the sync engine evaluates, plus two conditions that
+ * are not warnings but mean exactly the same thing in practice: a fund with
+ * nobody named responsible, and one Pulse has never classified. Both are
+ * management-attention items that no warning would ever raise, because
+ * nothing is wrong with the money — the gap is in the housekeeping.
+ */
+export type AttentionKey =
+  | 'any'
+  | 'serious'
+  | 'deficit'
+  | 'dormancy'
+  | 'min_balance'
+  | 'unusual_movement'
+  | 'unowned'
+  | 'unclassified'
+
+export const ATTENTION_LABELS: Record<AttentionKey, string> = {
+  any: 'Any warning',
+  serious: 'Serious',
+  deficit: 'In deficit',
+  dormancy: 'No transactions',
+  min_balance: 'Below minimum',
+  unusual_movement: 'Unusual movement',
+  unowned: 'No one responsible',
+  unclassified: 'Unclassified',
+}
+
+export const ATTENTION_HINTS: Record<AttentionKey, string> = {
+  any: 'Any open warning at all',
+  serious: 'Red warnings — a deficit on a restricted fund is spending money the charity does not hold',
+  deficit: 'The fund balance has gone below nil',
+  dormancy: 'Nothing has been posted for the dormancy period set for the fund',
+  min_balance: 'Below the minimum balance set for the fund',
+  unusual_movement: 'A month’s movement well outside the fund’s own norm',
+  unowned: 'Nobody is named responsible for the fund',
+  unclassified: 'Newly synced from Xero and not yet classified',
+}
+
+/** Which attention reasons apply to one fund. */
+export function fundAttention(
+  fund: Pick<VFundBalance, 'fund_id' | 'classified_at'>,
+  warningsByFund: Map<string, FundWarning[]>,
+  managerCounts: Map<string, number> | null,
+): Set<AttentionKey> {
+  const keys = new Set<AttentionKey>()
+  const warnings = warningsByFund.get(fund.fund_id) ?? []
+  if (warnings.length > 0) keys.add('any')
+  for (const w of warnings) {
+    keys.add(w.rule as AttentionKey)
+    if (w.severity === 'red') keys.add('serious')
+  }
+  // Only assert unowned when ownership is actually readable — see
+  // fetchFundManagerCounts.
+  if (managerCounts && (managerCounts.get(fund.fund_id) ?? 0) === 0) keys.add('unowned')
+  if (fund.classified_at === null) keys.add('unclassified')
+  return keys
+}
+
+export function groupWarningsByFund(warnings: FundWarning[]): Map<string, FundWarning[]> {
+  const map = new Map<string, FundWarning[]>()
+  for (const w of warnings) {
+    const list = map.get(w.fund_id)
+    if (list) list.push(w)
+    else map.set(w.fund_id, [w])
+  }
+  return map
+}
+
 export async function fetchFundMonthly(opts: { since?: string; fundId?: string } = {}): Promise<VFundMonthly[]> {
   let q = supabase.from('v_fund_monthly').select('*').order('month', { ascending: true })
   if (opts.since) q = q.gte('month', opts.since)
