@@ -666,6 +666,138 @@ export function signoffState(
   return { kind: 'signed', signoff }
 }
 
+// ── Fund balances at a date ─────────────────────────────────────────────────
+
+export interface FundBalanceAsAt {
+  fund_id: string
+  name: string
+  fund_type: string
+  opening: number
+  movement: number
+  balance: number
+}
+
+/**
+ * Every fund's balance AT A DATE, so a year end can actually be agreed.
+ * v_fund_balances is the position at the last sync and carries no date bound,
+ * which is fine for "where are we now" and useless for "does 30.09.2025 tie".
+ */
+export async function fetchFundBalancesAsAt(asAt: string): Promise<FundBalanceAsAt[]> {
+  const { data, error } = await supabase.rpc('fund_balances_as_at', { p_date: asAt })
+  if (error) throw new Error(error.message)
+  return ((data ?? []) as FundBalanceAsAt[]).slice().sort((a, b) => b.balance - a.balance)
+}
+
+export interface FundBalanceTarget {
+  as_at: string
+  expected_total: number
+  note: string | null
+  set_by: string | null
+  set_at: string
+}
+
+export async function fetchFundBalanceTargets(): Promise<FundBalanceTarget[]> {
+  const { data, error } = await supabase
+    .from('fund_balance_targets')
+    .select('*')
+    .order('as_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []) as FundBalanceTarget[]
+}
+
+export async function saveFundBalanceTarget(
+  asAt: string,
+  expectedTotal: number,
+  note: string | null,
+  userId: string,
+): Promise<void> {
+  const { error } = await supabase.from('fund_balance_targets').upsert(
+    { as_at: asAt, expected_total: round2(expectedTotal), note: note?.trim() || null, set_by: userId },
+    { onConflict: 'as_at' },
+  )
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Funds carrying the same non-nil balance as another fund at the same date.
+ *
+ * Two funds holding the identical figure to the penny is almost never a
+ * coincidence — it is the same fund in the register twice, usually because a
+ * tracking option was re-created with a corrected spelling and the opening
+ * balance went onto both. Worth naming, because it is a difference with an
+ * obvious fix rather than a number to go hunting for.
+ */
+export function duplicateBalanceGroups(
+  rows: FundBalanceAsAt[],
+): Array<{ balance: number; funds: FundBalanceAsAt[] }> {
+  const byBalance = new Map<number, FundBalanceAsAt[]>()
+  for (const row of rows) {
+    if (Math.round(row.balance * 100) === 0) continue
+    const key = Math.round(row.balance * 100)
+    const list = byBalance.get(key)
+    if (list) list.push(row)
+    else byBalance.set(key, [row])
+  }
+  return [...byBalance.values()]
+    .filter((funds) => funds.length > 1)
+    .map((funds) => ({ balance: funds[0].balance, funds }))
+    .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance))
+}
+
+/** The sign-off key for one fund at one date. */
+export function fundCheckId(fundId: string): string {
+  return `fund:${fundId}`
+}
+
+/**
+ * Tick off one fund's balance at a date. Shares recon_signoffs with the
+ * charity-level checks — which is why check_id was left as free text — so a
+ * fund tick lapses the moment its balance moves, exactly as the others do.
+ */
+export async function signOffFundBalance(
+  fund: FundBalanceAsAt,
+  asAt: string,
+  userId: string,
+  note: string | null,
+): Promise<void> {
+  const { error } = await supabase.from('recon_signoffs').upsert(
+    {
+      check_id: fundCheckId(fund.fund_id),
+      period_start: asAt,
+      period_end: asAt,
+      left_value: fund.balance,
+      right_value: fund.balance,
+      difference: 0,
+      note: note?.trim() || null,
+      signed_by: userId,
+      signed_at: new Date().toISOString(),
+    },
+    { onConflict: 'check_id,period_start,period_end' },
+  )
+  if (error) throw new Error(error.message)
+}
+
+export async function withdrawFundSignoff(fundId: string, asAt: string): Promise<void> {
+  const { error } = await supabase
+    .from('recon_signoffs')
+    .delete()
+    .eq('check_id', fundCheckId(fundId))
+    .eq('period_start', asAt)
+    .eq('period_end', asAt)
+  if (error) throw new Error(error.message)
+}
+
+/** Has this fund's balance moved since it was ticked off? */
+export function fundSignoffState(fund: FundBalanceAsAt, signoffs: ReconSignoff[]): SignoffState {
+  const signoff = signoffs.find((s) => s.check_id === fundCheckId(fund.fund_id))
+  if (!signoff) return { kind: 'unsigned' }
+  const was = signoff.left_value
+  if (was !== null && Math.abs(round2(fund.balance - was)) > TOLERANCE) {
+    return { kind: 'superseded', signoff, movedBy: round2(fund.balance - was) }
+  }
+  return { kind: 'signed', signoff }
+}
+
 export function checksSummary(checks: ReconCheck[]): {
   agreed: number
   differences: number

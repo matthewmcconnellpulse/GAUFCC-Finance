@@ -25,6 +25,7 @@ import { formatDate, formatDateTime, formatMoney } from '@/lib/format'
 import { useSupabaseQuery } from '@/lib/useSupabaseQuery'
 import { fetchXeroReport } from '@/modules/financials/lib'
 import { Segmented } from '@/modules/reports/components'
+import { FundBalancePanel } from './FundBalancePanel'
 import {
   buildReconChecks,
   checksSummary,
@@ -284,6 +285,9 @@ export default function ReconciliationPage() {
               </Card>
             ))}
           </div>
+
+          {/* Fund-by-fund agreement to a stated position at a date */}
+          <FundBalancePanel />
 
           {plQ.data ? (
             <Card className="px-5 py-4 mt-5">

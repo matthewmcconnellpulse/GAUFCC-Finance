@@ -296,14 +296,19 @@ export default function FundsPage() {
         subtitle={`${funds.length} funds, live from Xero tracking categories`}
         actions={
           isPulse ? (
-            <Button variant="ghost" size="sm" onClick={() => navigate('/funds/integrity')}>
-              Data integrity
-              {unclassified > 0 ? (
-                <span className="font-mono text-[10px] bg-warn/20 text-warn-ink rounded-full px-1.5">
-                  {unclassified}
-                </span>
-              ) : null}
-            </Button>
+            <>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/reconciliation')}>
+                Reconcile balances
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => navigate('/funds/integrity')}>
+                Data integrity
+                {unclassified > 0 ? (
+                  <span className="font-mono text-[10px] bg-warn/20 text-warn-ink rounded-full px-1.5">
+                    {unclassified}
+                  </span>
+                ) : null}
+              </Button>
+            </>
           ) : undefined
         }
       />
