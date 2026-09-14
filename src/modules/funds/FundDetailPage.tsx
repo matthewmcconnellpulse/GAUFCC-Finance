@@ -152,18 +152,18 @@ export default function FundDetailPage() {
     if (ids.length === 0) return null
     const floor = fund.opening_balance_date // v_fund_balances ignores lines before it
 
-    const preRows: Array<Pick<XeroTransaction, 'net' | 'account_code'>> = []
+    const preRows: Array<Pick<XeroTransaction, 'net' | 'account_code' | 'date'>> = []
     if (!floor || floor < period.start) {
       for (let offset = 0; offset < ALL_CAP; offset += ALL_CHUNK) {
         let q = supabase
           .from('xero_transactions')
-          .select('net, account_code')
+          .select('net, account_code, date')
           .in('tracking_option_1_id', ids)
           .lt('date', period.start)
         if (floor) q = q.gte('date', floor)
         const { data, error } = await q.range(offset, offset + ALL_CHUNK - 1)
         if (error) throw new Error(error.message)
-        preRows.push(...((data ?? []) as Array<Pick<XeroTransaction, 'net' | 'account_code'>>))
+        preRows.push(...((data ?? []) as Array<Pick<XeroTransaction, 'net' | 'account_code' | 'date'>>))
         if (!data || data.length < ALL_CHUNK) break
       }
     }
@@ -259,21 +259,33 @@ export default function FundDetailPage() {
     if (!fund || !stmt.data || !acctMap) return null
     const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
     const classOf = (code: string | null) => (code ? (acctMap.get(code)?.class ?? null) : null)
-    const movement = (net: number, code: string | null) => {
+    const floor = fund.opening_balance_date
+    /**
+     * A line's effect on the fund. Income adds, expenditure takes away, and an
+     * equity line tagged to the fund is an apportionment in or out — which
+     * moves the fund without being either. Equity only counts STRICTLY after
+     * the opening balance date: the brought-forward journal sits on that date
+     * and IS the opening balance, so counting it would state the fund twice.
+     */
+    const movement = (net: number, code: string | null, date: string | null) => {
       const c = classOf(code)
-      return c === 'REVENUE' ? net : c === 'EXPENSE' ? -net : 0
+      if (c === 'REVENUE') return net
+      if (c === 'EXPENSE') return -net
+      if (c === 'EQUITY' && floor && date && date > floor) return net
+      return 0
     }
 
     let opening = fund.opening_balance
-    for (const r of stmt.data.preRows) opening = r2(opening + movement(r.net, r.account_code))
+    for (const r of stmt.data.preRows) {
+      opening = r2(opening + movement(r.net, r.account_code, r.date))
+    }
 
-    const floor = fund.opening_balance_date
     const byLine = new Map<string, { movement: number; balance: number }>()
     let running = opening
     for (const r of stmt.data.periodRows) {
       // Lines dated before the opening-balance date are visible but excluded
       // from the balance (same rule as v_fund_balances).
-      const m = floor && r.date < floor ? 0 : movement(r.net, r.account_code)
+      const m = floor && r.date < floor ? 0 : movement(r.net, r.account_code, r.date)
       running = r2(running + m)
       byLine.set(`${r.xero_id}-${r.line_id}`, { movement: m, balance: running })
     }
@@ -561,7 +573,7 @@ export default function FundDetailPage() {
             />
             <p className="px-5 pb-4 text-[11px] text-stone-500">
               {showBalance
-                ? 'Reads like a bank statement: In / out is each line’s effect on the fund (income +, expenditure −), and Balance runs from the opening balance brought forward — the same basis as the balance history above. Lines marked — sit on balance-sheet accounts and don’t move the fund.'
+                ? 'Reads like a bank statement: In / out is each line’s effect on the fund (income +, expenditure −, and apportionments on the fund capital account either way), and Balance runs from the opening balance brought forward — the same basis as the balance history above. Lines marked — sit on other balance-sheet accounts and don’t move the fund.'
                 : 'In / out is each line’s effect on the fund (income +, expenditure −). Switch to All to see the running balance and the opening balance brought forward.'}
             </p>
           </>

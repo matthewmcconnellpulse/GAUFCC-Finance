@@ -562,7 +562,7 @@ function SofaPage({
                   <td className="pk-num">{fig(r.opening)}</td>
                   <td className="pk-num">{fig(r.income)}</td>
                   <td className="pk-num">{expFig(r.expenditure)}</td>
-                  <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+                  <td className="pk-num">{fig(r.transfers)}</td>
                   <td className="pk-num">{fig(r.net)}</td>
                   <td className="pk-num pk-strong">{fig(r.closing)}</td>
                 </tr>
@@ -576,7 +576,7 @@ function SofaPage({
                   <td className="pk-num">{fig(g.opening)}</td>
                   <td className="pk-num">{fig(g.income)}</td>
                   <td className="pk-num">{expFig(g.expenditure)}</td>
-                  <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+                  <td className="pk-num">{fig(g.transfers)}</td>
                   <td className="pk-num">{fig(g.net)}</td>
                   <td className="pk-num">{fig(g.closing)}</td>
                 </tr>
@@ -589,7 +589,7 @@ function SofaPage({
                 <td className="pk-num">{fig(t.opening)}</td>
                 <td className="pk-num">{fig(t.income)}</td>
                 <td className="pk-num">{expFig(t.expenditure)}</td>
-                <td className="pk-num" style={{ color: '#b3afa3' }}>—</td>
+                <td className="pk-num">{fig(t.transfers)}</td>
                 <td className="pk-num">{fig(t.net)}</td>
                 <td className="pk-num">{fig(t.closing)}</td>
               </tr>
@@ -598,8 +598,9 @@ function SofaPage({
         </tbody>
       </table>
       <div className="pk-footnote">
-        All figures £, unaudited, drawn from the Xero ledger via the platform's nightly sync. Transfers between
-        funds are not yet recorded on the platform and are shown as nil.
+        All figures £, unaudited, drawn from the Xero ledger via the platform's nightly sync. Transfers are
+        amounts apportioned between funds — posted on the fund capital accounts rather than as income or
+        expenditure — so they move the closing balance without forming part of the net for the period.
       </div>
       {footer}
     </div>

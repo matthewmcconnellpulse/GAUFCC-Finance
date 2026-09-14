@@ -24,6 +24,10 @@ export interface VFundBalance {
   ytd_income: number
   ytd_expenditure: number
   open_warning_count: number
+  /** Movement on the equity accounts tagged to this fund — apportionments in
+   *  or out. Not income or expenditure; see v_fund_balances. */
+  transfers: number
+  ytd_transfers: number
 }
 
 export interface VFundMonthly {

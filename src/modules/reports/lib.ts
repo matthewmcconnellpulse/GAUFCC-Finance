@@ -25,6 +25,8 @@ export interface VFundBalance {
   ytd_income: number
   ytd_expenditure: number
   open_warning_count: number
+  transfers: number
+  ytd_transfers: number
 }
 
 export interface VFundMonthly {
@@ -32,6 +34,8 @@ export interface VFundMonthly {
   month: string // ISO date, first of month
   income: number
   expenditure: number
+  /** Apportionment in or out, posted on the equity accounts. */
+  transfers: number
 }
 
 export interface FundMeta {
@@ -474,7 +478,8 @@ export interface ReportFundRow {
   opening: number
   income: number
   expenditure: number
-  transfers: number // placeholder — transfers between funds land in a later phase
+  /** Apportionment in or out of the fund, posted on the equity accounts. */
+  transfers: number
   net: number
   closing: number
   flagged: boolean
@@ -518,7 +523,10 @@ export interface ReportModel {
   scopedFundIds: string[]
 }
 
-export type MonthlyIndex = Map<string, Map<string, { income: number; expenditure: number }>>
+export type MonthlyIndex = Map<
+  string,
+  Map<string, { income: number; expenditure: number; transfers: number }>
+>
 
 export function buildMonthlyIndex(monthly: VFundMonthly[]): MonthlyIndex {
   const index: MonthlyIndex = new Map()
@@ -529,9 +537,10 @@ export function buildMonthlyIndex(monthly: VFundMonthly[]): MonthlyIndex {
       fund = new Map()
       index.set(r.fund_id, fund)
     }
-    const entry = fund.get(key) ?? { income: 0, expenditure: 0 }
+    const entry = fund.get(key) ?? { income: 0, expenditure: 0, transfers: 0 }
     entry.income += r.income
     entry.expenditure += r.expenditure
+    entry.transfers += r.transfers ?? 0
     fund.set(key, entry)
   }
   return index
@@ -560,16 +569,21 @@ export function buildReportModel(sources: ReportSources, state: BuilderState): R
     let priorNet = 0
     let income = 0
     let expenditure = 0
+    let transfers = 0
     if (months) {
       for (const [key, m] of months) {
-        if (key < startKey) priorNet += m.income - m.expenditure
+        if (key < startKey) priorNet += m.income - m.expenditure + m.transfers
         else if (key <= endKey) {
           income += m.income
           expenditure += m.expenditure
+          transfers += m.transfers
         }
       }
     }
     const opening = b.opening_balance + priorNet
+    // Transfers move the fund without being income or expenditure, so they sit
+    // outside net and inside closing — the SOFA column exists to show exactly
+    // that distinction.
     const net = income - expenditure
     const meta = metaById.get(b.fund_id)
     return {
@@ -579,9 +593,9 @@ export function buildReportModel(sources: ReportSources, state: BuilderState): R
       opening,
       income,
       expenditure,
-      transfers: 0,
+      transfers,
       net,
-      closing: opening + net,
+      closing: opening + net + transfers,
       flagged: b.open_warning_count > 0,
       description: meta?.description ?? null,
       purpose: meta?.purpose ?? null,
@@ -598,7 +612,7 @@ export function buildReportModel(sources: ReportSources, state: BuilderState): R
       opening: sum(groupRows, (r) => r.opening),
       income: sum(groupRows, (r) => r.income),
       expenditure: sum(groupRows, (r) => r.expenditure),
-      transfers: 0,
+      transfers: sum(groupRows, (r) => r.transfers),
       net: sum(groupRows, (r) => r.net),
       closing: sum(groupRows, (r) => r.closing),
     })
@@ -608,7 +622,7 @@ export function buildReportModel(sources: ReportSources, state: BuilderState): R
     opening: sum(rows, (r) => r.opening),
     income: sum(rows, (r) => r.income),
     expenditure: sum(rows, (r) => r.expenditure),
-    transfers: 0,
+    transfers: sum(rows, (r) => r.transfers),
     net: sum(rows, (r) => r.net),
     closing: sum(rows, (r) => r.closing),
   }
@@ -705,7 +719,7 @@ export function balanceSeries(
   let balance = fund.opening
   if (months) {
     for (const [key, m] of months) {
-      const net = m.income - m.expenditure
+      const net = m.income - m.expenditure + m.transfers
       if (key >= startKey && key < windowStart) balance += net
       else if (key >= windowStart && key < startKey) balance -= net
     }
@@ -713,7 +727,7 @@ export function balanceSeries(
   const values: number[] = []
   for (const key of monthKeys) {
     const m = months?.get(key)
-    if (m) balance += m.income - m.expenditure
+    if (m) balance += m.income - m.expenditure + m.transfers
     values.push(balance)
   }
   return values

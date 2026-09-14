@@ -131,7 +131,8 @@ export default function BuilderPage({
           <ScopeControls state={state} funds={src.balances} onChange={onChange} />
           <p className="text-[11px] text-stone-500">
             Showing {scopeLabel.toLowerCase()} for {label}. Figures are measured on the whole months the period
-            touches; transfers between funds are not yet recorded and show as nil.
+            touches. Transfers are amounts apportioned between funds, posted on the fund capital
+            accounts rather than as income or expenditure.
           </p>
         </div>
       </Card>

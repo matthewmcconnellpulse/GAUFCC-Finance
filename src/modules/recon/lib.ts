@@ -256,6 +256,8 @@ export interface FundTotals {
   income: number
   expenditure: number
   net: number
+  /** Apportionment between funds — moves a fund without being income or spend. */
+  transfers: number
   opening: number
   closing: number
   fundCount: number
@@ -264,22 +266,28 @@ export interface FundTotals {
 export async function fetchFundTotals(): Promise<FundTotals> {
   const { data, error } = await supabase
     .from('v_fund_balances')
-    .select('opening_balance, balance, ytd_income, ytd_expenditure')
+    .select('opening_balance, balance, ytd_income, ytd_expenditure, ytd_transfers, active')
     .limit(1000)
   if (error) throw new Error(error.message)
-  const rows = (data ?? []) as Array<{
+  // Retired funds keep their row for the audit trail but are no longer part
+  // of the charity's position, so they must not reach a reconciliation total.
+  const rows = ((data ?? []) as Array<{
     opening_balance: number
     balance: number
     ytd_income: number
     ytd_expenditure: number
-  }>
+    ytd_transfers: number
+    active: boolean
+  }>).filter((r) => r.active)
   const sum = (pick: (r: (typeof rows)[number]) => number) => round2(rows.reduce((s, r) => s + pick(r), 0))
   const income = sum((r) => r.ytd_income)
   const expenditure = sum((r) => r.ytd_expenditure)
+  const transfers = sum((r) => r.ytd_transfers ?? 0)
   return {
     income,
     expenditure,
     net: round2(income - expenditure),
+    transfers,
     opening: sum((r) => r.opening_balance),
     closing: sum((r) => r.balance),
     fundCount: rows.length,
@@ -674,6 +682,8 @@ export interface FundBalanceAsAt {
   fund_type: string
   opening: number
   movement: number
+  /** Apportioned in or out of the fund, posted on the equity accounts. */
+  transfers: number
   balance: number
 }
 

@@ -310,6 +310,7 @@ export function FundBalancePanel() {
                     <th className="th-register text-left">Fund</th>
                     <th className="th-register text-right">Opening</th>
                     <th className="th-register text-right">Movement</th>
+                    <th className="th-register text-right">Transfers</th>
                     <th className="th-register text-right">Balance</th>
                     <th className="th-register text-right">Checked</th>
                   </tr>
@@ -348,6 +349,15 @@ export function FundBalancePanel() {
                           )}
                         >
                           {Math.round(row.movement * 100) === 0 ? '—' : formatMoney(row.movement)}
+                        </td>
+                        <td
+                          className={cx(
+                            'td-register figure text-right whitespace-nowrap',
+                            row.transfers < 0 ? 'text-danger-ink' : 'text-stone-500',
+                          )}
+                          title="Apportioned in or out on the fund capital accounts"
+                        >
+                          {Math.round((row.transfers ?? 0) * 100) === 0 ? '—' : formatMoney(row.transfers)}
                         </td>
                         <td
                           className={cx(
@@ -394,8 +404,9 @@ export function FundBalancePanel() {
             </div>
           </div>
           <p className="text-[11px] text-stone-500 mt-2">
-            Balances are the fund's opening position plus movement up to {formatDate(asAt)}, voided documents
-            excluded. Every tick is audit-logged.
+            Balances are the fund's opening position, plus income less expenditure, plus anything apportioned
+            in or out on the fund capital accounts, up to {formatDate(asAt)}. Voided documents are excluded and
+            every tick is audit-logged.
           </p>
         </>
       ) : null}
