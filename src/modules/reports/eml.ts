@@ -118,6 +118,6 @@ export function distributionBody(opts: { title: string; periodLabel: string }): 
     'If anything needs a closer look before the meeting, do let us know.',
     '',
     'Kind regards,',
-    'Pulse Accountants & Tax Advisors',
+    'Pulse Accountants & Tax Advisers',
   ].join('\n')
 }

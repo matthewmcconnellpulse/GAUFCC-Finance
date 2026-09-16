@@ -1,7 +1,7 @@
 # GAUFCC Finance Platform — Build Brief & Sequenced Claude Code Prompts
 
 **Client:** General Assembly of Unitarian and Free Christian Churches (GAUFCC)
-**Prepared by:** Pulse Accountants & Tax Advisors Limited
+**Prepared by:** Pulse Accountants & Tax Advisers Limited
 **Date:** July 2026
 **Purpose:** This document is the master brief. Section A goes to **Claude Code** (sequenced build prompts). Section B goes to **Claude Design**. Section C lists open decisions and dictation clarifications for Matthew to confirm.
 

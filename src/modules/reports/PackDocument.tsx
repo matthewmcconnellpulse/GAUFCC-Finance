@@ -511,7 +511,7 @@ function CoverPage(props: PackInputs) {
         <div className="pk-ghost-numeral">{closing.replace('£', '')}</div>
         <div className="pk-cover-grid" style={{ gridTemplateColumns: '1fr auto' }}>
           <div style={{ font: "400 12px/1.6 'Geist',sans-serif", color: 'rgba(251,250,247,.6)' }}>
-            Prepared by Pulse Accountants &amp; Tax Advisors<br />for the Board of Trustees
+            Prepared by Pulse Accountants &amp; Tax Advisers<br />for the Board of Trustees
           </div>
           <div className="pk-mono" style={{ fontSize: 12, fontWeight: 500, color: '#08f2c7', alignSelf: 'end' }}>
             {closing} net funds
@@ -564,7 +564,7 @@ function CoverPage(props: PackInputs) {
         </div>
         <div className="pk-cover-cell">
           <div className="pk-kicker">Prepared by</div>
-          <div>Pulse Accountants &amp;<br />Tax Advisors Limited</div>
+          <div>Pulse Accountants &amp;<br />Tax Advisers Limited</div>
         </div>
         <div className="pk-cover-cell">
           <div className="pk-kicker">Scope</div>
@@ -1141,7 +1141,7 @@ function IntegrityPage({
         <div className="pk-panel" style={{ flex: 1 }}>
           <div className="pk-kicker">Prepared by</div>
           <div style={{ font: "400 13px 'Geist',sans-serif", color: '#0d0a26', marginTop: 8 }}>{props.preparedBy}</div>
-          <div style={{ font: "400 11px 'Geist',sans-serif", color: '#4a4740', marginTop: 2 }}>Pulse Accountants &amp; Tax Advisors</div>
+          <div style={{ font: "400 11px 'Geist',sans-serif", color: '#4a4740', marginTop: 2 }}>Pulse Accountants &amp; Tax Advisers</div>
         </div>
         <div className="pk-panel" style={{ flex: 1 }}>
           <div className="pk-kicker">Flagged funds this period</div>
@@ -1221,7 +1221,7 @@ function AppendixPage({
         </table>
       </div>
       <div className="pk-footnote" style={{ marginTop: 24 }}>
-        This pack was assembled on the GAUFCC Finance Platform by Pulse Accountants &amp; Tax Advisors Limited.
+        This pack was assembled on the GAUFCC Finance Platform by Pulse Accountants &amp; Tax Advisers Limited.
         Figures are unaudited and drawn from the live Xero ledger. The commentary was written and reviewed by
         a named member of staff before issue.
       </div>
