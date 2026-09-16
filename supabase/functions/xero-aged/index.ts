@@ -176,9 +176,15 @@ Deno.serve(async (req) => {
           // invoice has AmountDue 0 and drops out of the filter anyway.
           where: 'AmountDue > 0',
           Statuses: 'AUTHORISED',
+          // summaryOnly drops line items, credit notes, prepayments and
+          // payments from the response — everything ageing does not need.
           summaryOnly: 'true',
           page: String(page),
-          order: 'DueDate ASC',
+          // No `order` here, deliberately. Xero rejects ordering by DueDate
+          // when summaryOnly is set ("Ordering by DueDate is unavailable on
+          // this endpoint when using the summaryOnly flag", HTTP 400), which
+          // made the whole card read "Unavailable". Ageing sorts by amount in
+          // `summarise` anyway, so the API order never reached the report.
         },
       })
       const batch = data?.Invoices ?? []
