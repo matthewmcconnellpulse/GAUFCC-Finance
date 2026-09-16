@@ -56,16 +56,19 @@
  *     mirrored rows (delete-then-insert) rather than upserting.
  *
  * ── Voided and deleted documents ─────────────────────────────────────────────
- * Every document endpoint is fetched WITHOUT a status filter, and each
- * document's mirrored lines are cleared before the live ones are written back
- * (delete-then-upsert, as the journal path has always done).
+ * Every document endpoint is fetched WITHOUT a status filter, and the
+ * mirrored lines of any document that comes back VOIDED or DELETED are
+ * removed. Live documents are upserted as before.
  *
  * This matters incrementally. Filtering VOIDED out at the fetch looks right
  * and is correct on a full sync, but a bill synced while AUTHORISED and voided
  * afterwards then never comes back — so its lines stay in the mirror for good,
- * moving fund balances and appearing as "missing a fund code". Clearing by
- * document also stops an edited document that lost a line from leaving the old
- * line behind.
+ * moving fund balances and appearing as "missing a fund code".
+ *
+ * Only dead documents are cleared, deliberately. Clearing every fetched
+ * document and re-upserting would also tidy an edited document that lost a
+ * line, but it is not atomic: a timeout between the delete and the upsert
+ * would blank live ledger lines until the next successful sync.
  *
  * ── Incremental sync ─────────────────────────────────────────────────────────
  * If-Modified-Since is taken from the last *successful* run's started_at.
@@ -375,10 +378,14 @@ export function isDeadDocument(status: string | null | undefined): boolean {
 }
 
 /**
- * Remove every mirrored line for the given documents, then the caller
- * re-upserts the live ones. Delete-then-upsert rather than upsert alone
- * because a document that loses a line on edit would otherwise leave the old
- * line behind — and because it is what makes voiding actually take effect.
+ * Remove the mirrored lines of documents that are no longer transactions.
+ *
+ * Only DEAD documents are cleared, never live ones. Clearing every fetched
+ * document and re-upserting would also tidy an edited document that lost a
+ * line, but it is not atomic: a timeout between the delete and the upsert
+ * would blank live ledger lines until the next successful sync, and on a full
+ * pull that is most of the mirror. A void is rare and its rows are already
+ * wrong; live rows are neither.
  */
 async function clearDocumentRows(
   svc: SupabaseClient,
@@ -754,13 +761,11 @@ async function syncInvoices(
       }),
     )
   }
-  // Clear every fetched document's lines, then write back the live ones. This
-  // is what makes a void take effect, and it also stops an edited invoice that
-  // lost a line from leaving the old line behind.
+  // Only the voided and deleted ones are cleared — see clearDocumentRows.
   await clearDocumentRows(
     svc,
     ['ACCPAY', 'ACCREC'],
-    invoices.map((inv) => inv.InvoiceID),
+    invoices.filter((inv) => isDeadDocument(inv.Status)).map((inv) => inv.InvoiceID),
   )
   if (!rows.length) return 0
   return upsertBatches(
@@ -838,7 +843,7 @@ async function syncBankTransactions(
   await clearDocumentRows(
     svc,
     [...bankSourceTypes],
-    transactions.map((tx) => tx.BankTransactionID),
+    transactions.filter((tx) => isDeadDocument(tx.Status)).map((tx) => tx.BankTransactionID),
   )
   if (!rows.length) return 0
   return upsertBatches(
@@ -888,7 +893,7 @@ async function syncCreditNotes(
   await clearDocumentRows(
     svc,
     ['CREDIT_NOTE'],
-    creditNotes.map((cn) => cn.CreditNoteID),
+    creditNotes.filter((cn) => isDeadDocument(cn.Status)).map((cn) => cn.CreditNoteID),
   )
   if (!rows.length) return 0
   return upsertBatches(
