@@ -7,7 +7,7 @@
  * generate-pack), so styling is via pk-* classes and inline styles only —
  * no Tailwind utilities inside this tree.
  */
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import type { FundType } from '@/types/db'
 import { formatDate, formatDateTime } from '@/lib/format'
 import { BalanceLine, BalanceWaterfall, SplitBar } from './charts'
@@ -40,6 +40,10 @@ import {
   ManagementBalanceSheetPage,
   ManagementPlPage,
   ReservesPage,
+  balanceSheetRows,
+  paginateBalanceSheet,
+  paginatePl,
+  plEntries,
   type ManagementData,
 } from './ManagementPages'
 
@@ -50,6 +54,59 @@ export const PACK_CONCEPTS: Array<{ value: PackConcept; label: string }> = [
   { value: 'waveform', label: 'The Waveform' },
   { value: 'minute', label: 'The Minute Book' },
 ]
+
+/**
+ * The pages a pack may include. The cover, contents and executive summary are
+ * not listed: they are the pack, not sections of it.
+ *
+ * Toggling exists because a pack is issued to trustees, and a page that is not
+ * finished yet is worse than a page that is absent — the cash flow forecast is
+ * the case that prompted this. Anything switched off leaves the pack entirely:
+ * no page, no contents line, and the page numbers close up behind it.
+ */
+export type PackSectionKey =
+  | 'management_pl'
+  | 'balance_sheet'
+  | 'receivables'
+  | 'payables'
+  | 'budget'
+  | 'forecast'
+  | 'reserves'
+  | 'charts'
+  | 'sofa'
+  | 'movement'
+  | 'top_movements'
+  | 'fund_pages'
+  | 'integrity'
+  | 'appendix'
+
+export type PackSections = Record<PackSectionKey, boolean>
+
+export const PACK_SECTIONS: Array<{
+  key: PackSectionKey
+  label: string
+  hint: string
+}> = [
+  { key: 'management_pl', label: 'Income and expenditure', hint: 'Whole charity, on SORP headings' },
+  { key: 'balance_sheet', label: 'Balance sheet', hint: 'Whole charity, as reported by Xero' },
+  { key: 'receivables', label: 'Receivables', hint: 'Outstanding sales invoices by age' },
+  { key: 'payables', label: 'Payables', hint: 'Outstanding bills by age' },
+  { key: 'budget', label: 'Against budget', hint: 'This year and last year\u2019s budget' },
+  { key: 'forecast', label: 'Cash flow forecast', hint: 'From the current week forward' },
+  { key: 'reserves', label: 'Reserves and coverage', hint: 'Free reserves against annual operating cost' },
+  { key: 'charts', label: 'The period in charts', hint: 'Monthly movement, fund split, ageing' },
+  { key: 'sofa', label: 'Movements by fund', hint: 'SOFA-style income and expenditure' },
+  { key: 'movement', label: 'Where the period moved', hint: 'Balance waterfall and reserves split' },
+  { key: 'top_movements', label: 'Top ten movements in funds', hint: 'Largest net movements' },
+  { key: 'fund_pages', label: 'Per-fund pages', hint: 'One page per flagged or chosen fund' },
+  { key: 'integrity', label: 'Data integrity', hint: 'Checks and period stamps' },
+  { key: 'appendix', label: 'Appendix', hint: 'Warnings register and settings snapshot' },
+]
+
+/** Everything on, which is what a pack did before sections could be toggled. */
+export const ALL_PACK_SECTIONS: PackSections = Object.fromEntries(
+  PACK_SECTIONS.map((s) => [s.key, true]),
+) as PackSections
 
 export type CommentarySectionKey = 'executive_summary' | 'financials' | 'reserves'
 
@@ -97,6 +154,11 @@ export interface PackInputs {
   commentary: PackCommentary
   fundNotes: PackFundNotes
   /**
+   * Which sections to print. Optional, and absent means "all of them", so a
+   * pack saved before toggling existed still renders in full.
+   */
+  sections?: Partial<PackSections>
+  /**
    * The whole-charity reports that sit above the fund pages. Each field is
    * independently nullable: a pack still assembles when one live source is
    * unreachable, and the page in question says so rather than vanishing.
@@ -141,6 +203,17 @@ type SofaEntry =
 
 const SOFA_ROWS_PER_PAGE = 26
 
+/**
+ * Contents rows per page.
+ *
+ * A .pk-toc-row costs 10px padding + a 14px title line + an 11px sub-line +
+ * 10px padding + its hairline ≈ 51px, against roughly 894px of usable page
+ * once the head and footer are taken off — so 17 fit, and 16 are printed for
+ * headroom. The contents was previously one page however long the list got,
+ * which silently clipped the tail of the fund pages off it.
+ */
+const TOC_ROWS_PER_PAGE = 16
+
 function sofaEntries(model: ReportModel): SofaEntry[] {
   const entries: SofaEntry[] = []
   for (const group of model.groups) {
@@ -164,67 +237,229 @@ interface TocEntry {
   page: number
 }
 
+/**
+ * One printed page, and the contents line it opens (if any).
+ *
+ * The pack is assembled as a list of these before anything renders, which is
+ * what makes the numbering right: sections can be switched off and long
+ * sections can run to several pages without the page numbers, the contents
+ * lines and the "p.04 / 26" footers ever disagreeing. Previously each page
+ * number was a hand-incremented local, so one extra page anywhere put every
+ * later cross-reference out by one.
+ */
+interface PackPageSpec {
+  key: string
+  toc?: { title: string; sub?: string }
+  render: (pageNum: number, footer: ReactNode) => ReactNode
+}
+
 export default function PackDocument(props: PackInputs) {
   const { model } = props
-  const sofaPages = chunk(sofaEntries(model), SOFA_ROWS_PER_PAGE)
 
-  // Page numbering: cover 1 · contents 2 · exec 3 · the whole-charity
-  // management reports · then the fund-level pages · integrity · appendix.
-  // The management reports come first deliberately: trustees should read the
-  // charity's own position before the fund-by-fund detail.
-  let page = 3
-  const execPage = page
-  page += 1
-  const managementPlPage = page
-  page += 1
-  const balanceSheetPage = page
-  page += 1
-  const receivablesPage = page
-  page += 1
-  const payablesPage = page
-  page += 1
-  const budgetPage = page
-  page += 1
-  const forecastPage = page
-  page += 1
-  const reservesPage = page
-  page += 1
-  const chartsPage = page
-  page += 1
-  const sofaStart = page
-  page += sofaPages.length
-  const movementPage = page
-  page += 1
-  const topMovementPage = page
-  page += 1
-  const fundStart = page
-  page += props.fundPages.length
-  const integrityPage = page
-  page += 1
-  const appendixPage = page
-  const totalPages = page
+  // Absent means included — see PackInputs.sections.
+  const on = (key: PackSectionKey) => props.sections?.[key] !== false
 
-  const toc: TocEntry[] = [
-    { title: 'Executive summary', sub: 'The period in brief, with commentary', page: execPage },
-    { title: 'Income and expenditure', sub: 'Whole charity, on SORP headings', page: managementPlPage },
-    { title: 'Balance sheet', sub: 'Whole charity, as reported by Xero', page: balanceSheetPage },
-    { title: 'Receivables', sub: 'Outstanding sales invoices by age', page: receivablesPage },
-    { title: 'Payables', sub: 'Outstanding bills by age', page: payablesPage },
-    { title: 'Against budget', sub: 'This year and last year’s budget', page: budgetPage },
-    { title: 'Cash flow forecast', sub: 'From the current week forward', page: forecastPage },
-    { title: 'Reserves and coverage', sub: 'Free reserves against annual operating cost', page: reservesPage },
-    { title: 'The period in charts', sub: 'Monthly movement, fund split, ageing', page: chartsPage },
-    { title: 'Movements by fund', sub: 'SOFA-style income and expenditure', page: sofaStart },
-    { title: 'Where the period moved', sub: 'Balance waterfall and reserves split', page: movementPage },
-    { title: 'Top ten movements in funds', sub: 'Largest net movements, whichever direction', page: topMovementPage },
-    ...props.fundPages.map((f, i) => ({
-      title: f.name,
-      sub: `${FUND_TYPE_LABELS[f.fund_type]} fund${f.flagged ? ' · flagged this period' : ''}`,
-      page: fundStart + i,
-    })),
-    { title: 'Data integrity', sub: 'Checks and period stamps', page: integrityPage },
-    { title: 'Appendix', sub: 'Warnings register and platform settings', page: appendixPage },
+  const specs: PackPageSpec[] = [
+    {
+      key: 'exec',
+      toc: { title: 'Executive summary', sub: 'The period in brief, with commentary' },
+      render: (n, f) => <ExecutiveSummaryPage {...props} pageNum={n} footer={f} />,
+    },
   ]
+
+  // Whole-charity management reports, above the fund reports: trustees should
+  // read the charity's own position before the fund-by-fund detail.
+  if (on('management_pl')) {
+    const plPages = props.management.pl ? paginatePl(plEntries(props.management.pl)) : [[]]
+    plPages.forEach((entries, i) => {
+      specs.push({
+        key: `management_pl_${i}`,
+        toc:
+          i === 0
+            ? { title: 'Income and expenditure', sub: 'Whole charity, on SORP headings' }
+            : undefined,
+        render: (n, f) => (
+          <ManagementPlPage
+            data={props.management}
+            period={props.period}
+            periodLabel={props.periodLabel}
+            entries={entries}
+            continued={i > 0}
+            last={i === plPages.length - 1}
+            pageNum={n}
+            footer={f}
+          />
+        ),
+      })
+    })
+  }
+
+  if (on('balance_sheet')) {
+    const bsPages = paginateBalanceSheet(balanceSheetRows(props.management))
+    bsPages.forEach((rows, i) => {
+      specs.push({
+        key: `balance_sheet_${i}`,
+        toc:
+          i === 0
+            ? { title: 'Balance sheet', sub: 'Whole charity, as reported by Xero' }
+            : undefined,
+        render: (n, f) => (
+          <ManagementBalanceSheetPage
+            data={props.management}
+            asAt={props.period.end}
+            rows={rows}
+            continued={i > 0}
+            last={i === bsPages.length - 1}
+            pageNum={n}
+            footer={f}
+          />
+        ),
+      })
+    })
+  }
+
+  if (on('receivables')) {
+    specs.push({
+      key: 'receivables',
+      toc: { title: 'Receivables', sub: 'Outstanding sales invoices by age' },
+      render: (n, f) => (
+        <AgedPage data={props.management} side="receivables" pageNum={n} footer={f} />
+      ),
+    })
+  }
+
+  if (on('payables')) {
+    specs.push({
+      key: 'payables',
+      toc: { title: 'Payables', sub: 'Outstanding bills by age' },
+      render: (n, f) => <AgedPage data={props.management} side="payables" pageNum={n} footer={f} />,
+    })
+  }
+
+  if (on('budget')) {
+    specs.push({
+      key: 'budget',
+      toc: { title: 'Against budget', sub: 'This year and last year’s budget' },
+      render: (n, f) => (
+        <BudgetPage data={props.management} periodLabel={props.periodLabel} pageNum={n} footer={f} />
+      ),
+    })
+  }
+
+  if (on('forecast')) {
+    specs.push({
+      key: 'forecast',
+      toc: { title: 'Cash flow forecast', sub: 'From the current week forward' },
+      render: (n, f) => <ForecastPage data={props.management} pageNum={n} footer={f} />,
+    })
+  }
+
+  if (on('reserves')) {
+    specs.push({
+      key: 'reserves',
+      toc: { title: 'Reserves and coverage', sub: 'Free reserves against annual operating cost' },
+      render: (n, f) => (
+        <ReservesPage
+          data={props.management}
+          totals={props.model.totals}
+          pageNum={n}
+          footer={f}
+        />
+      ),
+    })
+  }
+
+  if (on('charts')) {
+    specs.push({
+      key: 'charts',
+      toc: { title: 'The period in charts', sub: 'Monthly movement, fund split, ageing' },
+      render: (n, f) => (
+        <ChartsPage
+          data={props.management}
+          model={props.model}
+          periodLabel={props.periodLabel}
+          pageNum={n}
+          footer={f}
+        />
+      ),
+    })
+  }
+
+  if (on('sofa')) {
+    const sofaPages = chunk(sofaEntries(model), SOFA_ROWS_PER_PAGE)
+    sofaPages.forEach((entries, i) => {
+      specs.push({
+        key: `sofa_${i}`,
+        toc:
+          i === 0
+            ? { title: 'Movements by fund', sub: 'SOFA-style income and expenditure' }
+            : undefined,
+        render: (n, f) => <SofaPage entries={entries} continued={i > 0} pageNum={n} footer={f} />,
+      })
+    })
+  }
+
+  if (on('movement')) {
+    specs.push({
+      key: 'movement',
+      toc: { title: 'Where the period moved', sub: 'Balance waterfall and reserves split' },
+      render: (n, f) => <MovementPage {...props} pageNum={n} footer={f} />,
+    })
+  }
+
+  if (on('top_movements')) {
+    specs.push({
+      key: 'top_movements',
+      toc: { title: 'Top ten movements in funds', sub: 'Largest net movements, whichever direction' },
+      render: (n, f) => <TopMovementsPage {...props} pageNum={n} footer={f} />,
+    })
+  }
+
+  if (on('fund_pages')) {
+    for (const fund of props.fundPages) {
+      specs.push({
+        key: `fund_${fund.fund_id}`,
+        toc: {
+          title: fund.name,
+          sub: `${FUND_TYPE_LABELS[fund.fund_type]} fund${fund.flagged ? ' · flagged this period' : ''}`,
+        },
+        render: (n, f) => <FundPage fund={fund} inputs={props} pageNum={n} footer={f} />,
+      })
+    }
+  }
+
+  if (on('integrity')) {
+    specs.push({
+      key: 'integrity',
+      toc: { title: 'Data integrity', sub: 'Checks and period stamps' },
+      render: (n, f) => <IntegrityPage {...props} pageNum={n} footer={f} />,
+    })
+  }
+
+  if (on('appendix')) {
+    specs.push({
+      key: 'appendix',
+      toc: { title: 'Appendix', sub: 'Warnings register and platform settings' },
+      render: (n, f) => <AppendixPage {...props} pageNum={n} footer={f} />,
+    })
+  }
+
+  // Cover is page 1; the contents takes as many pages as its own lines need,
+  // and how many that is depends only on the number of lines — never on the
+  // page numbers — so there is no circularity to resolve here.
+  const tocLines = specs
+    .map((spec, index) => ({ spec, index }))
+    .filter(({ spec }) => spec.toc)
+  const tocPageCount = Math.max(1, Math.ceil(tocLines.length / TOC_ROWS_PER_PAGE))
+  const firstContentPage = 2 + tocPageCount
+  const totalPages = 1 + tocPageCount + specs.length
+
+  const toc: TocEntry[] = tocLines.map(({ spec, index }) => ({
+    title: spec.toc!.title,
+    sub: spec.toc!.sub,
+    page: firstContentPage + index,
+  }))
+  const tocPages = chunk(toc, TOC_ROWS_PER_PAGE)
 
   const footer = (n: number) => (
     <div className="pk-footer">
@@ -236,78 +471,18 @@ export default function PackDocument(props: PackInputs) {
   return (
     <div className="pk-root">
       <CoverPage {...props} />
-      <ContentsPage toc={toc} footer={footer(2)} />
-      <ExecutiveSummaryPage {...props} pageNum={execPage} footer={footer(execPage)} />
-
-      {/* Whole-charity management reports, above the fund reports */}
-      <ManagementPlPage
-        data={props.management}
-        period={props.period}
-        periodLabel={props.periodLabel}
-        pageNum={managementPlPage}
-        footer={footer(managementPlPage)}
-      />
-      <ManagementBalanceSheetPage
-        data={props.management}
-        asAt={props.period.end}
-        pageNum={balanceSheetPage}
-        footer={footer(balanceSheetPage)}
-      />
-      <AgedPage
-        data={props.management}
-        side="receivables"
-        pageNum={receivablesPage}
-        footer={footer(receivablesPage)}
-      />
-      <AgedPage
-        data={props.management}
-        side="payables"
-        pageNum={payablesPage}
-        footer={footer(payablesPage)}
-      />
-      <BudgetPage
-        data={props.management}
-        periodLabel={props.periodLabel}
-        pageNum={budgetPage}
-        footer={footer(budgetPage)}
-      />
-      <ForecastPage data={props.management} pageNum={forecastPage} footer={footer(forecastPage)} />
-      <ReservesPage
-        data={props.management}
-        totals={props.model.totals}
-        pageNum={reservesPage}
-        footer={footer(reservesPage)}
-      />
-      <ChartsPage
-        data={props.management}
-        model={props.model}
-        periodLabel={props.periodLabel}
-        pageNum={chartsPage}
-        footer={footer(chartsPage)}
-      />
-
-      {sofaPages.map((entries, i) => (
-        <SofaPage
+      {tocPages.map((entries, i) => (
+        <ContentsPage
           key={i}
-          entries={entries}
+          toc={entries}
           continued={i > 0}
-          pageNum={sofaStart + i}
-          footer={footer(sofaStart + i)}
+          pageNum={2 + i}
+          footer={footer(2 + i)}
         />
       ))}
-      <MovementPage {...props} pageNum={movementPage} footer={footer(movementPage)} />
-      <TopMovementsPage {...props} pageNum={topMovementPage} footer={footer(topMovementPage)} />
-      {props.fundPages.map((f, i) => (
-        <FundPage
-          key={f.fund_id}
-          fund={f}
-          inputs={props}
-          pageNum={fundStart + i}
-          footer={footer(fundStart + i)}
-        />
+      {specs.map((spec, i) => (
+        <Fragment key={spec.key}>{spec.render(firstContentPage + i, footer(firstContentPage + i))}</Fragment>
       ))}
-      <IntegrityPage {...props} pageNum={integrityPage} footer={footer(integrityPage)} />
-      <AppendixPage {...props} pageNum={appendixPage} footer={footer(appendixPage)} />
     </div>
   )
 }
@@ -408,12 +583,22 @@ function CoverPage(props: PackInputs) {
 
 // ── Contents ─────────────────────────────────────────────────────────────────
 
-function ContentsPage({ toc, footer }: { toc: TocEntry[]; footer: ReactNode }) {
+function ContentsPage({
+  toc,
+  continued,
+  pageNum,
+  footer,
+}: {
+  toc: TocEntry[]
+  continued: boolean
+  pageNum: number
+  footer: ReactNode
+}) {
   return (
     <div className="pk-page">
       <div className="pk-head">
-        <div className="pk-h1">Contents</div>
-        <div className="pk-pagenum">02</div>
+        <div className="pk-h1">{continued ? 'Contents (continued)' : 'Contents'}</div>
+        <div className="pk-pagenum">{String(pageNum).padStart(2, '0')}</div>
       </div>
       <div style={{ marginTop: 18 }}>
         {toc.map((entry, i) => (
@@ -432,6 +617,28 @@ function ContentsPage({ toc, footer }: { toc: TocEntry[]; footer: ReactNode }) {
   )
 }
 
+/**
+ * What, if anything, to disclose about AI at the front of the pack.
+ *
+ * Commentary is typed by the preparer; a per-fund note may have been polished
+ * by AI at the preparer's request. Either way a human has read and accepted
+ * every word before a pack is issued, so the wording says "polished", not
+ * "written" — and when nothing was AI-assisted, nothing is claimed.
+ */
+function aiDisclosure(props: PackInputs): string | null {
+  const touched = (state: CommentaryState | undefined) =>
+    !!state && state.text.trim() !== '' && (state.source === 'ai' || state.source === 'ai_edited')
+
+  const sections = Object.values(props.commentary).filter(touched).length
+  const funds = Object.values(props.fundNotes).filter(touched).length
+  if (sections === 0 && funds === 0) return null
+
+  const parts: string[] = []
+  if (sections > 0) parts.push(`${sections} commentary section${sections === 1 ? '' : 's'}`)
+  if (funds > 0) parts.push(`${funds} fund note${funds === 1 ? '' : 's'}`)
+  return `Wording in ${parts.join(' and ')} was polished with AI from the preparer’s own draft, then reviewed before issue. Every figure is computed from the ledger.`
+}
+
 // ── Executive summary ────────────────────────────────────────────────────────
 
 function ExecutiveSummaryPage({
@@ -441,12 +648,22 @@ function ExecutiveSummaryPage({
 }: PackInputs & { pageNum: number; footer: ReactNode }) {
   const t = props.model.totals
   const highlights = props.topMovements.slice(0, 3)
+  const ai = aiDisclosure(props)
   return (
     <div className="pk-page">
       <div className="pk-head">
         <div className="pk-h1">Executive summary</div>
         <div className="pk-pagenum">{String(pageNum).padStart(2, '0')}</div>
       </div>
+      {/* Where AI touched any wording in this pack, the reader is told here —
+          at the front, before a single figure — rather than in a footnote
+          beside the sentence it helped with. */}
+      {ai ? (
+        <div className="pk-ai-attrib" style={{ marginTop: 14 }}>
+          <span aria-hidden="true">✦</span>
+          <span>{ai}</span>
+        </div>
+      ) : null}
       <div className="pk-kpis">
         <div className="pk-kpi">
           <div className="pk-kpi-label">Net funds</div>

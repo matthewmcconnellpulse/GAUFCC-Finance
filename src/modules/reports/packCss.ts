@@ -153,10 +153,61 @@ tr.pk-grand td {
 .pk-toc-leader { flex: 1; border-bottom: 1px dotted #b3afa3; transform: translateY(-3px); }
 .pk-toc-page { font: 500 11px 'JetBrains Mono', monospace; color: #0d0a26; }
 
+/* ── Inline editing (preview only; stripped before a pack is saved) ── */
+.pk-page [data-pk-editable='true'] {
+  outline: 1px dashed rgba(4,184,148,.5); outline-offset: 3px; border-radius: 3px;
+}
+.pk-page [data-pk-editable='true']:hover { outline-color: rgba(4,184,148,.85); }
+.pk-page [data-pk-editable='true']:focus {
+  outline: 2px solid #04b894; background: rgba(8,242,199,.07);
+}
+@media print {
+  .pk-page [data-pk-editable='true'] { outline: none !important; background: none !important; }
+}
+
 /* ── Integrity ── */
 .pk-check-row { display: grid; grid-template-columns: 24px 1fr 110px; gap: 0 14px; padding: 12px 0; border-bottom: 1px solid #f3f1ea; align-items: center; }
 .pk-check-status { text-align: right; font: 500 10px 'Geist', sans-serif; letter-spacing: .08em; text-transform: uppercase; }
 `
+
+/**
+ * Selectors the preview lets you edit in place.
+ *
+ * Narrative only, deliberately. Every figure in a pack is computed from the
+ * ledger and reconciles to it; letting someone retype one in the preview would
+ * produce a trustee pack that disagrees with Xero and with the reconciliation
+ * screens, with nothing to show which was edited. Wording is a judgement the
+ * preparer owns, so wording is what is editable.
+ */
+export const PACK_EDITABLE_SELECTOR = [
+  '.pk-body',
+  '.pk-lede',
+  '.pk-highlight',
+  '.pk-note',
+  '.pk-purpose',
+  '.pk-footnote',
+  '.pk-cover-title',
+  '.pk-cover-sub',
+  '.pk-h1',
+].join(',')
+
+/**
+ * Serialise the live pack DOM for saving or downloading.
+ *
+ * Reads the rendered DOM rather than re-rendering, so in-place edits made in
+ * the preview are carried into the saved file — then clears the editing
+ * attributes from the clone, so the pack that leaves here is a document and
+ * not a half-open editor.
+ */
+export function serialisePack(container: HTMLElement): string {
+  const clone = container.cloneNode(true) as HTMLElement
+  for (const node of clone.querySelectorAll('[contenteditable]')) {
+    node.removeAttribute('contenteditable')
+    node.removeAttribute('spellcheck')
+    node.removeAttribute('data-pk-editable')
+  }
+  return clone.innerHTML
+}
 
 /**
  * Wrap serialised pack markup into a complete standalone HTML document.

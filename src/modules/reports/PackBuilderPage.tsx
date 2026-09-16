@@ -39,14 +39,18 @@ import { CommentaryEditor } from './CommentaryEditor'
 import { FundNoteEditor } from './FundNoteEditor'
 import { PeriodControls, Segmented } from './components'
 import PackDocument, {
+  ALL_PACK_SECTIONS,
   EMPTY_COMMENTARY,
   PACK_CONCEPTS,
+  PACK_SECTIONS,
   type PackCommentary,
   type PackConcept,
   type PackFundNotes,
   type PackInputs,
+  type PackSectionKey,
+  type PackSections,
 } from './PackDocument'
-import { buildPackHtml, PACK_CSS } from './packCss'
+import { buildPackHtml, serialisePack, PACK_CSS, PACK_EDITABLE_SELECTOR } from './packCss'
 import type { ManagementData } from './ManagementPages'
 import {
   annualOperatingBudgetFromXero,
@@ -136,10 +140,13 @@ export default function PackBuilderPage({
   const [extraFundIds, setExtraFundIds] = useState<string[]>([])
   const [commentary, setCommentary] = useState<PackCommentary>(EMPTY_COMMENTARY)
   const [fundNotes, setFundNotes] = useState<PackFundNotes>({})
+  const [sections, setSections] = useState<PackSections>(ALL_PACK_SECTIONS)
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [savedPath, setSavedPath] = useState<string | null>(null)
+  const [downloaded, setDownloaded] = useState<string | null>(null)
   const serialRef = useRef<HTMLDivElement | null>(null)
 
   const sources = useSupabaseQuery(fetchReportSources, [])
@@ -332,6 +339,11 @@ export default function PackBuilderPage({
     model,
   ])
 
+  const excludedSections = useMemo(
+    () => PACK_SECTIONS.filter((section) => !sections[section.key]),
+    [sections],
+  )
+
   const notedFundCount = useMemo(
     () => fundPages.filter((f) => (fundNotes[f.fund_id]?.text ?? '').trim()).length,
     [fundPages, fundNotes],
@@ -355,9 +367,121 @@ export default function PackBuilderPage({
           preparedBy: profile?.full_name ?? 'Pulse Accountants',
           commentary,
           fundNotes,
+          sections,
           management,
         }
       : null
+
+  /**
+   * The document React renders while editing is on.
+   *
+   * In-place edits live in the DOM, not in React state, so anything that
+   * re-renders PackDocument with fresh props would throw them away. Holding a
+   * snapshot for the duration of the edit keeps the rendered props identical,
+   * so reconciliation leaves the edited text nodes alone.
+   */
+  const [frozenInputs, setFrozenInputs] = useState<PackInputs | null>(null)
+  const renderedInputs = frozenInputs ?? packInputs
+
+  const [editedAt, setEditedAt] = useState<string | null>(null)
+
+  const startEditing = () => {
+    if (!packInputs) return
+    setFrozenInputs(packInputs)
+    setEditing(true)
+  }
+
+  /**
+   * Leaves edit mode but keeps the snapshot pinned, so the edits survive into
+   * Save and Download. Clearing it here instead would re-render the document
+   * from live props and silently throw the rewriting away.
+   */
+  const stopEditing = () => setEditing(false)
+
+  /** Throw the manual edits away and go back to what the ledger says. */
+  const revertEdits = () => {
+    setEditing(false)
+    setFrozenInputs(null)
+    setEditedAt(null)
+  }
+
+  // A pinned snapshot is only safe while the figures behind it are unchanged.
+  // The moment the period, scope, sections or commentary move, the snapshot is
+  // stale — and a stale pack is the one thing worse than an unedited one — so
+  // it is dropped and the document re-syncs to the ledger.
+  useEffect(() => {
+    setEditing(false)
+    setFrozenInputs(null)
+    setEditedAt(null)
+  }, [
+    state.period.start,
+    state.period.end,
+    state.scope,
+    state.fundId,
+    state.groupType,
+    sections,
+    extraFundIds,
+    commentary,
+    fundNotes,
+    title,
+    concept,
+  ])
+
+  // Note when something was actually retyped, so the builder can say so.
+  useEffect(() => {
+    const root = serialRef.current
+    if (!root || !editing) return
+    const onInput = () => setEditedAt(new Date().toISOString())
+    root.addEventListener('input', onInput)
+    return () => root.removeEventListener('input', onInput)
+  }, [editing])
+
+  // Applied imperatively, and re-applied after every render: React owns these
+  // nodes, so the attribute has to be put back whenever it replaces one.
+  useEffect(() => {
+    const root = serialRef.current
+    if (!root) return
+    for (const node of root.querySelectorAll<HTMLElement>(PACK_EDITABLE_SELECTOR)) {
+      if (editing) {
+        node.setAttribute('contenteditable', 'true')
+        node.setAttribute('spellcheck', 'true')
+        node.setAttribute('data-pk-editable', 'true')
+      } else {
+        node.removeAttribute('contenteditable')
+        node.removeAttribute('spellcheck')
+        node.removeAttribute('data-pk-editable')
+      }
+    }
+  })
+
+  /** The pack as a standalone file, edits and all. */
+  const packHtml = () =>
+    buildPackHtml(`<div class="pk-preview">${serialisePack(serialRef.current!)}</div>`, title)
+
+  const fileName = () =>
+    `${title} ${label}`.replace(/[^\w\s.-]/g, '').replace(/\s+/g, ' ').trim().replace(/ /g, '-') +
+    '.html'
+
+  /**
+   * Straight to the browser's downloads, no dialogue. The file is the same
+   * standalone HTML the library stores: open it and it prints as A4, so it is
+   * both the archive copy and the thing you attach to a board email. A true
+   * PDF still comes from Print, which keeps the type vector rather than
+   * rasterising the pack through a canvas.
+   */
+  const downloadPack = () => {
+    if (!serialRef.current) return
+    const blob = new Blob([packHtml()], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName()
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    setDownloaded(fileName())
+  }
 
   const savePack = async () => {
     if (!serialRef.current || !model) return
@@ -365,7 +489,7 @@ export default function PackBuilderPage({
     setSaveError(null)
     setSavedPath(null)
     try {
-      const html = buildPackHtml(`<div class="pk-preview">${serialRef.current.innerHTML}</div>`, title)
+      const html = packHtml()
       const body: Record<string, unknown> = {
         title,
         period_start: state.period.start,
@@ -373,6 +497,11 @@ export default function PackBuilderPage({
         scope: state.scope,
         html,
         commentary: {
+          // generate-pack persists this blob verbatim, so the record of which
+          // pages the pack actually contained travels with it.
+          included_sections: Object.entries(sections)
+            .filter(([, included]) => included)
+            .map(([key]) => key),
           sections: commentary,
           funds: Object.fromEntries(
             fundPages
@@ -437,7 +566,10 @@ export default function PackBuilderPage({
         actions={
           <>
             <Button variant="ghost" onClick={() => setPreviewOpen(true)}>
-              Preview & print
+              Preview & edit
+            </Button>
+            <Button variant="ghost" onClick={downloadPack}>
+              Download
             </Button>
             <Button
               variant="money"
@@ -453,6 +585,23 @@ export default function PackBuilderPage({
       {saveError ? (
         <div className="mb-4">
           <ErrorNotice message={`Save failed — ${saveError}`} />
+        </div>
+      ) : null}
+      {editedAt ? (
+        <div className="mb-4 rounded-card border border-mint-700/40 bg-mint/10 text-[12.5px] px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-mint-900">
+          <span>
+            This pack carries manual text edits made in the preview. Save and Download both include them; the
+            figures are untouched.
+          </span>
+          <button onClick={revertEdits} className="underline underline-offset-2 font-medium">
+            Revert to the ledger wording
+          </button>
+        </div>
+      ) : null}
+      {downloaded ? (
+        <div className="mb-4 rounded-card border border-stone-200 bg-paper-2 text-[12.5px] px-4 py-3 text-stone-700">
+          Downloaded <b className="font-medium">{downloaded}</b> to your Downloads folder. Open it and print to
+          PDF if you need one — the type stays sharp that way.
         </div>
       ) : null}
       {savedPath ? (
@@ -499,6 +648,67 @@ export default function PackBuilderPage({
               Scope follows the report builder — currently {scopeLabel.toLowerCase()}. Change it there if needed.
             </p>
           </div>
+        </Card>
+
+        {/* Which pages go in */}
+        <Card className="px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel>Pages to include</SectionLabel>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setSections(ALL_PACK_SECTIONS)}
+                className="text-[11.5px] text-indigo underline underline-offset-2"
+              >
+                Select all
+              </button>
+              <span className="text-stone-300">·</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setSections(
+                    Object.fromEntries(PACK_SECTIONS.map((x) => [x.key, false])) as PackSections,
+                  )
+                }
+                className="text-[11.5px] text-indigo underline underline-offset-2"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+          <p className="text-[12px] text-stone-500 mb-3">
+            Anything switched off leaves the pack completely — no page, no contents line, and the page numbers
+            close up behind it. Use it to hold back a report that is not finished, rather than issuing a page the
+            trustees should not act on yet.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-x-6 border border-stone-150 rounded-control divide-y sm:divide-y-0 divide-stone-150">
+            {PACK_SECTIONS.map((section) => (
+              <label
+                key={section.key}
+                className="flex items-start gap-3 px-3.5 py-2.5 text-[12.5px] cursor-pointer hover:bg-paper-2"
+              >
+                <input
+                  type="checkbox"
+                  checked={sections[section.key]}
+                  onChange={(e) =>
+                    setSections((prev) => ({ ...prev, [section.key]: e.target.checked }))
+                  }
+                  className="accent-[#211951] mt-0.5"
+                />
+                <span className="min-w-0">
+                  <span className="block text-ink">{section.label}</span>
+                  <span className="block text-[11px] text-stone-500">{section.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {excludedSections.length > 0 ? (
+            <p className="text-[11.5px] text-warn-ink mt-2.5">
+              Held back from this pack: {excludedSections.map((x) => x.label).join(', ')}.
+            </p>
+          ) : (
+            <p className="text-[11px] text-stone-500 mt-2.5">All pages are included.</p>
+          )}
         </Card>
 
         {/* Fund pages */}
@@ -732,28 +942,35 @@ export default function PackBuilderPage({
           ) : null}
           <ul className="text-[12.5px] text-stone-700 space-y-1.5">
             <li>Cover — {PACK_CONCEPTS.find((c) => c.value === concept)?.label}, contents, executive summary</li>
-            <li>
-              Whole-charity management reports — income and expenditure, balance sheet, receivables, payables,
-              budget, cash flow forecast, reserves and coverage, and the period in charts
-            </li>
-            <li>Charity-level financials — movements by fund, waterfall and reserves split</li>
-            <li>Top ten movements in funds — largest net movers, ranked</li>
-            <li>
-              {fundPages.length} per-fund page{fundPages.length === 1 ? '' : 's'}
-              {flaggedFunds.length > 0 ? ` (${flaggedFunds.length} flagged, auto-included)` : ''}
-              {notedFundCount > 0 ? ` · ${notedFundCount} carrying a note` : ''}
-            </li>
-            <li>
-              Data integrity —{' '}
-              {stamps.loading
-                ? 'checking stamps…'
-                : `${(stamps.data ?? []).filter((s) => s.stamped).length} of ${(stamps.data ?? []).length} months stamped complete`}
-            </li>
-            <li>Appendix — warnings register and platform settings snapshot</li>
+            {PACK_SECTIONS.filter((x) => sections[x.key]).map((section) => (
+              <li key={section.key}>
+                {section.label} — {section.hint}
+                {section.key === 'fund_pages'
+                  ? `: ${fundPages.length} page${fundPages.length === 1 ? '' : 's'}${
+                      flaggedFunds.length > 0 ? `, ${flaggedFunds.length} flagged` : ''
+                    }${notedFundCount > 0 ? `, ${notedFundCount} carrying a note` : ''}`
+                  : ''}
+                {section.key === 'integrity'
+                  ? `: ${
+                      stamps.loading
+                        ? 'checking stamps…'
+                        : `${(stamps.data ?? []).filter((x) => x.stamped).length} of ${(stamps.data ?? []).length} months stamped complete`
+                    }`
+                  : ''}
+              </li>
+            ))}
           </ul>
-          <div className="flex items-center gap-2 mt-4">
+          {excludedSections.length > 0 ? (
+            <p className="text-[12px] text-warn-ink mt-3">
+              Not included: {excludedSections.map((x) => x.label).join(', ')}.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2 mt-4">
             <Button variant="ghost" onClick={() => setPreviewOpen(true)}>
-              Preview & print
+              Preview & edit
+            </Button>
+            <Button variant="ghost" onClick={downloadPack}>
+              Download
             </Button>
             <Button variant="money" disabled={saving} onClick={() => void savePack()}>
               {saving ? 'Saving…' : 'Save to pack library'}
@@ -767,22 +984,54 @@ export default function PackBuilderPage({
 
       {/* The pack itself — portal to <body>, hidden unless previewing, always
           mounted so Save can serialise it. */}
-      {packInputs
+      {renderedInputs
         ? createPortal(
             <div className={previewOpen ? 'pack-overlay' : 'pack-hidden-doc'}>
               <style>{PACK_CSS}</style>
               {previewOpen ? (
                 <div className="pack-overlay-toolbar no-print">
-                  <div className="text-[12px]">
+                  <div className="text-[12px] min-w-0">
                     <span className="font-medium">{title}</span>
-                    <span className="opacity-60"> · {label} · File → Print produces the PDF</span>
+                    <span className="opacity-60">
+                      {' · '}
+                      {label}
+                      {' · '}
+                      {editing
+                        ? 'click any paragraph to rewrite it — figures stay as the ledger reports them'
+                        : 'Download for a file, Print for a PDF'}
+                    </span>
                   </div>
                   <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={editing ? stopEditing : startEditing}
+                      className={cx(
+                        'rounded-full px-4 py-1.5 text-[12px] font-medium',
+                        editing
+                          ? 'bg-mint/90 text-indigo hover:brightness-95'
+                          : 'bg-white/10 hover:bg-white/20',
+                      )}
+                    >
+                      {editing ? 'Done editing' : 'Edit text'}
+                    </button>
+                    {editedAt ? (
+                      <button
+                        onClick={revertEdits}
+                        className="rounded-full border border-white/25 hover:bg-white/10 px-4 py-1.5 text-[12px]"
+                      >
+                        Revert text
+                      </button>
+                    ) : null}
                     <button
                       onClick={() => window.print()}
                       className="rounded-full bg-white/10 hover:bg-white/20 px-4 py-1.5 text-[12px] font-medium"
                     >
                       Print / save as PDF
+                    </button>
+                    <button
+                      onClick={downloadPack}
+                      className="rounded-full bg-white/10 hover:bg-white/20 px-4 py-1.5 text-[12px] font-medium"
+                    >
+                      Download
                     </button>
                     <button
                       onClick={() => void savePack()}
@@ -797,7 +1046,10 @@ export default function PackBuilderPage({
                       {saving ? 'Saving…' : 'Save to library'}
                     </button>
                     <button
-                      onClick={() => setPreviewOpen(false)}
+                      onClick={() => {
+                        stopEditing()
+                        setPreviewOpen(false)
+                      }}
                       className="rounded-full border border-white/25 hover:bg-white/10 px-4 py-1.5 text-[12px]"
                     >
                       Close
@@ -806,7 +1058,7 @@ export default function PackBuilderPage({
                 </div>
               ) : null}
               <div className="pk-preview" ref={serialRef}>
-                <PackDocument {...packInputs} />
+                <PackDocument {...renderedInputs} />
               </div>
             </div>,
             document.body,

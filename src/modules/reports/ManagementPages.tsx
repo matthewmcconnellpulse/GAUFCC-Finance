@@ -89,16 +89,147 @@ export interface ManagementData {
 
 // ── Whole-charity statement of financial activities ─────────────────────────
 
+/**
+ * The statement flattened to one entry per printed row.
+ *
+ * Pagination has to happen at row granularity, not group granularity: a
+ * single expenditure group can be longer than a page on its own, so splitting
+ * by group would still overflow. Every row the page can emit is represented
+ * here, which is what lets the page budget be honoured exactly.
+ */
+type PlEntry =
+  | { kind: 'section'; label: string; colour: string }
+  | { kind: 'group_label'; label: string }
+  | { kind: 'account'; code: string; name: string; amount: number; expenditure: boolean }
+  | { kind: 'group_total'; label: string; amount: number; expenditure: boolean }
+  | { kind: 'subtotal'; label: string; amount: number; expenditure: boolean }
+  | { kind: 'grand'; label: string; amount: number }
+
+export function plEntries(pl: WholeBusinessPl): PlEntry[] {
+  const out: PlEntry[] = []
+
+  out.push({ kind: 'section', label: 'Income', colour: '#036c57' })
+  for (const group of pl.income) {
+    out.push({ kind: 'group_label', label: group.label })
+    for (const row of group.rows) {
+      out.push({ kind: 'account', code: row.code, name: row.name, amount: row.amount, expenditure: false })
+    }
+    out.push({ kind: 'group_total', label: group.label, amount: group.total, expenditure: false })
+  }
+  out.push({ kind: 'subtotal', label: 'Total income', amount: pl.totalIncome, expenditure: false })
+
+  out.push({ kind: 'section', label: 'Expenditure', colour: '#a3348f' })
+  for (const group of pl.expenditure) {
+    out.push({ kind: 'group_label', label: group.label })
+    for (const row of group.rows) {
+      out.push({ kind: 'account', code: row.code, name: row.name, amount: row.amount, expenditure: true })
+    }
+    out.push({ kind: 'group_total', label: group.label, amount: group.total, expenditure: true })
+  }
+  out.push({
+    kind: 'subtotal',
+    label: 'Total expenditure',
+    amount: pl.totalExpenditure,
+    expenditure: true,
+  })
+
+  out.push({
+    kind: 'grand',
+    label: `Net ${pl.net >= 0 ? 'income' : 'expenditure'} for the period`,
+    amount: pl.net,
+  })
+  return out
+}
+
+/**
+ * Rows per printed page, budgeted the same way as the balance sheet: ~912px
+ * of page once head and footer are off, less the headline tiles (~70px), the
+ * table's top margin (22px), its header row (~30px) and the footnote (~60px)
+ * on the opening page. A row averages 27px. Rounded down for headroom.
+ */
+export const PL_ROWS_FIRST = 24
+export const PL_ROWS_CONTINUED = 28
+
+export function paginatePl(entries: PlEntry[]): PlEntry[][] {
+  if (entries.length <= PL_ROWS_FIRST) return [entries]
+  const pages: PlEntry[][] = [entries.slice(0, PL_ROWS_FIRST)]
+  for (let i = PL_ROWS_FIRST; i < entries.length; i += PL_ROWS_CONTINUED) {
+    pages.push(entries.slice(i, i + PL_ROWS_CONTINUED))
+  }
+  return pages
+}
+
+function PlEntryRow({ entry }: { entry: PlEntry }) {
+  switch (entry.kind) {
+    case 'section':
+      return (
+        <tr className="pk-group-head">
+          <td colSpan={2} style={{ color: entry.colour }}>
+            {entry.label}
+          </td>
+        </tr>
+      )
+    case 'group_label':
+      return (
+        <tr>
+          <td colSpan={2} className="pk-kicker" style={{ paddingTop: 12, paddingBottom: 2, borderBottom: 0 }}>
+            {entry.label}
+          </td>
+        </tr>
+      )
+    case 'account':
+      return (
+        <tr>
+          <td style={{ paddingLeft: 16 }}>
+            <span className="pk-mono pk-muted" style={{ fontSize: 9.5, marginRight: 8 }}>
+              {entry.code}
+            </span>
+            {entry.name}
+          </td>
+          <td className="pk-num">{(entry.expenditure ? expFig : fig)(entry.amount)}</td>
+        </tr>
+      )
+    case 'group_total':
+      return (
+        <tr>
+          <td style={{ paddingLeft: 16, fontWeight: 500, color: '#211951' }}>{entry.label} total</td>
+          <td className="pk-num pk-strong">{(entry.expenditure ? expFig : fig)(entry.amount)}</td>
+        </tr>
+      )
+    case 'subtotal':
+      return (
+        <tr className="pk-subtotal">
+          <td>{entry.label}</td>
+          <td className="pk-num">{(entry.expenditure ? expFig : fig)(entry.amount)}</td>
+        </tr>
+      )
+    case 'grand':
+      return (
+        <tr className="pk-grand">
+          <td>{entry.label}</td>
+          <td className="pk-num">{fig(entry.amount)}</td>
+        </tr>
+      )
+  }
+}
+
 export function ManagementPlPage({
   data,
   period,
   periodLabel,
+  entries,
+  continued = false,
+  last = true,
   pageNum,
   footer,
 }: {
   data: ManagementData
   period: Period
   periodLabel: string
+  /** This page's slice of the statement — see paginatePl. */
+  entries: PlEntry[]
+  continued?: boolean
+  last?: boolean
   pageNum: number
   footer: ReactNode
 }) {
@@ -106,7 +237,7 @@ export function ManagementPlPage({
   return (
     <div className="pk-page">
       <PageHead
-        title="Income and expenditure"
+        title={continued ? 'Income and expenditure (continued)' : 'Income and expenditure'}
         kicker={`Whole charity · ${periodLabel}`}
         pageNum={pageNum}
       />
@@ -117,119 +248,54 @@ export function ManagementPlPage({
         />
       ) : (
         <>
-          <div className="pk-tiles" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-            <div className="pk-tile" style={{ borderTopColor: '#04b894' }}>
-              <div className="pk-tile-label">Total income</div>
-              <div className="pk-tile-value">{fig(pl.totalIncome)}</div>
+          {continued ? null : (
+            <div className="pk-tiles" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              <div className="pk-tile" style={{ borderTopColor: '#04b894' }}>
+                <div className="pk-tile-label">Total income</div>
+                <div className="pk-tile-value">{fig(pl.totalIncome)}</div>
+              </div>
+              <div className="pk-tile" style={{ borderTopColor: '#f25cce' }}>
+                <div className="pk-tile-label">Total expenditure</div>
+                <div className="pk-tile-value">{expFig(pl.totalExpenditure)}</div>
+              </div>
+              <div className="pk-tile" style={{ borderTopColor: '#211951' }}>
+                <div className="pk-tile-label">{pl.net >= 0 ? 'Surplus' : 'Deficit'}</div>
+                <div className="pk-tile-value">{fig(pl.net)}</div>
+              </div>
             </div>
-            <div className="pk-tile" style={{ borderTopColor: '#f25cce' }}>
-              <div className="pk-tile-label">Total expenditure</div>
-              <div className="pk-tile-value">{expFig(pl.totalExpenditure)}</div>
-            </div>
-            <div className="pk-tile" style={{ borderTopColor: '#211951' }}>
-              <div className="pk-tile-label">{pl.net >= 0 ? 'Surplus' : 'Deficit'}</div>
-              <div className="pk-tile-value">{fig(pl.net)}</div>
-            </div>
-          </div>
+          )}
 
           <table className="pk-table" style={{ marginTop: 22 }}>
             <thead>
               <tr>
-                <th>Account</th>
+                <th>Account{continued ? ' (continued)' : ''}</th>
                 <th className="pk-num" style={{ width: 110 }}>
                   {periodLabel}
                 </th>
               </tr>
             </thead>
             <tbody>
-              <tr className="pk-group-head">
-                <td colSpan={2} style={{ color: '#036c57' }}>
-                  Income
-                </td>
-              </tr>
-              {pl.income.map((group) => (
-                <PlGroupRows key={group.key} label={group.label} rows={group.rows} total={group.total} />
+              {entries.map((entry, i) => (
+                <PlEntryRow key={i} entry={entry} />
               ))}
-              <tr className="pk-subtotal">
-                <td>Total income</td>
-                <td className="pk-num">{fig(pl.totalIncome)}</td>
-              </tr>
-
-              <tr className="pk-group-head">
-                <td colSpan={2} style={{ color: '#a3348f' }}>
-                  Expenditure
-                </td>
-              </tr>
-              {pl.expenditure.map((group) => (
-                <PlGroupRows
-                  key={group.key}
-                  label={group.label}
-                  rows={group.rows}
-                  total={group.total}
-                  expenditure
-                />
-              ))}
-              <tr className="pk-subtotal">
-                <td>Total expenditure</td>
-                <td className="pk-num">{expFig(pl.totalExpenditure)}</td>
-              </tr>
-
-              <tr className="pk-grand">
-                <td>Net {pl.net >= 0 ? 'income' : 'expenditure'} for the period</td>
-                <td className="pk-num">{fig(pl.net)}</td>
-              </tr>
             </tbody>
           </table>
 
-          <div className="pk-footnote" style={{ maxWidth: 560, marginTop: 'auto' }}>
-            All figures £, unaudited, on Charities SORP (FRS 102) headings, for the whole charity across all
-            funds — {formatDate(period.start)} to {formatDate(period.end)}.{' '}
-            {pl.unallocatedNet === 0
-              ? 'Every line carries a fund.'
-              : `${sofaFigure(Math.abs(pl.unallocatedNet))} of this result carries no fund and is listed on the reconciliation.`}
-          </div>
+          {last ? (
+            <div className="pk-footnote" style={{ maxWidth: 560, marginTop: 'auto' }}>
+              All figures £, unaudited, on Charities SORP (FRS 102) headings, for the whole charity across all
+              funds — {formatDate(period.start)} to {formatDate(period.end)}.{' '}
+              {pl.unallocatedNet === 0
+                ? 'Every line carries a fund.'
+                : `${sofaFigure(Math.abs(pl.unallocatedNet))} of this result carries no fund and is listed on the reconciliation.`}
+            </div>
+          ) : (
+            <div className="pk-footnote" style={{ marginTop: 'auto' }}>Continued overleaf.</div>
+          )}
         </>
       )}
       {footer}
     </div>
-  )
-}
-
-function PlGroupRows({
-  label,
-  rows,
-  total,
-  expenditure,
-}: {
-  label: string
-  rows: Array<{ code: string; name: string; amount: number }>
-  total: number
-  expenditure?: boolean
-}) {
-  const format = expenditure ? expFig : fig
-  return (
-    <>
-      <tr>
-        <td colSpan={2} className="pk-kicker" style={{ paddingTop: 12, paddingBottom: 2, borderBottom: 0 }}>
-          {label}
-        </td>
-      </tr>
-      {rows.map((row) => (
-        <tr key={row.code}>
-          <td style={{ paddingLeft: 16 }}>
-            <span className="pk-mono pk-muted" style={{ fontSize: 9.5, marginRight: 8 }}>
-              {row.code}
-            </span>
-            {row.name}
-          </td>
-          <td className="pk-num">{format(row.amount)}</td>
-        </tr>
-      ))}
-      <tr>
-        <td style={{ paddingLeft: 16, fontWeight: 500, color: '#211951' }}>{label} total</td>
-        <td className="pk-num pk-strong">{format(total)}</td>
-      </tr>
-    </>
   )
 }
 
@@ -238,19 +304,29 @@ function PlGroupRows({
 export function ManagementBalanceSheetPage({
   data,
   asAt,
+  rows,
+  continued = false,
+  last = true,
   pageNum,
   footer,
 }: {
   data: ManagementData
   asAt: string
+  /** This page's slice of the flattened report — see paginateBalanceSheet. */
+  rows: FlatRow[]
+  continued?: boolean
+  last?: boolean
   pageNum: number
   footer: ReactNode
 }) {
-  const rows = flattenReportRows(data.balanceSheetReport)
   const h = data.balanceSheetHeadlines
   return (
     <div className="pk-page">
-      <PageHead title="Balance sheet" kicker={`Whole charity · as at ${formatDate(asAt)}`} pageNum={pageNum} />
+      <PageHead
+        title={continued ? 'Balance sheet (continued)' : 'Balance sheet'}
+        kicker={`Whole charity · as at ${formatDate(asAt)}`}
+        pageNum={pageNum}
+      />
       {rows.length === 0 ? (
         <SourceUnavailable
           what="The balance sheet"
@@ -261,6 +337,7 @@ export function ManagementBalanceSheetPage({
         />
       ) : (
         <>
+          {continued ? null : (
           <div className="pk-tiles" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
             <div className="pk-tile" style={{ borderTopColor: '#0d0a26' }}>
               <div className="pk-tile-label">Total assets</div>
@@ -275,6 +352,7 @@ export function ManagementBalanceSheetPage({
               <div className="pk-tile-value">{h.netAssets === null ? '—' : fig(h.netAssets)}</div>
             </div>
           </div>
+          )}
           <table className="pk-table" style={{ marginTop: 22 }}>
             <tbody>
               {rows.map((row, i) => (
@@ -291,10 +369,14 @@ export function ManagementBalanceSheetPage({
               ))}
             </tbody>
           </table>
-          <div className="pk-footnote" style={{ marginTop: 'auto' }}>
-            Rendered as Xero reports it, unaudited. The transaction mirror holds no journal-level data, so the
-            balance sheet is read live rather than re-derived — it therefore always agrees with Xero.
-          </div>
+          {last ? (
+            <div className="pk-footnote" style={{ marginTop: 'auto' }}>
+              Rendered as Xero reports it, unaudited. The transaction mirror holds no journal-level data, so the
+              balance sheet is read live rather than re-derived — it therefore always agrees with Xero.
+            </div>
+          ) : (
+            <div className="pk-footnote" style={{ marginTop: 'auto' }}>Continued overleaf.</div>
+          )}
         </>
       )}
       {footer}
@@ -302,12 +384,44 @@ export function ManagementBalanceSheetPage({
   )
 }
 
-interface FlatRow {
+export interface FlatRow {
   label: string
   value: number | null
   depth: number
   summary: boolean
   section: boolean
+}
+
+/**
+ * How many balance-sheet rows fit on one printed page.
+ *
+ * Measured against the stylesheet rather than guessed: an A4 pk-page gives
+ * 260mm (983px) of content, the head takes ~47px, the footer ~25px, the
+ * footnote ~44px and the table's own top margin 22px. A body row is 5px +
+ * 11.5px line + 5px + 1px border ≈ 25px, and the headline tiles cost a
+ * further ~70px on the opening page. Both figures are then rounded down for
+ * headroom, because a clipped balance sheet in a trustee pack is a defect
+ * that only shows up after it has been issued.
+ */
+export const BALANCE_SHEET_ROWS_FIRST = 26
+export const BALANCE_SHEET_ROWS_CONTINUED = 30
+
+/** Every row Xero reported, no longer truncated at a single page's worth. */
+export function balanceSheetRows(data: ManagementData): FlatRow[] {
+  return flattenReportRows(data.balanceSheetReport, 400)
+}
+
+/**
+ * Split the balance sheet across as many pages as it needs. Returns at least
+ * one (possibly empty) page so the "could not be read" notice still prints.
+ */
+export function paginateBalanceSheet(rows: FlatRow[]): FlatRow[][] {
+  if (rows.length <= BALANCE_SHEET_ROWS_FIRST) return [rows]
+  const pages: FlatRow[][] = [rows.slice(0, BALANCE_SHEET_ROWS_FIRST)]
+  for (let i = BALANCE_SHEET_ROWS_FIRST; i < rows.length; i += BALANCE_SHEET_ROWS_CONTINUED) {
+    pages.push(rows.slice(i, i + BALANCE_SHEET_ROWS_CONTINUED))
+  }
+  return pages
 }
 
 function parseFigure(value: string | undefined): number | null {
