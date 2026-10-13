@@ -7,7 +7,7 @@
  * generate-pack), so styling is via pk-* classes and inline styles only —
  * no Tailwind utilities inside this tree.
  */
-import { Fragment, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { FundType } from '@/types/db'
 import { formatDate, formatDateTime } from '@/lib/format'
 import { BalanceLine, BalanceWaterfall, SplitBar } from './charts'
@@ -480,8 +480,20 @@ export default function PackDocument(props: PackInputs) {
           footer={footer(2 + i)}
         />
       ))}
+      {/* Each page is tagged with the section it belongs to and the contents
+          line that opened it. The printed pack ignores these entirely; the
+          shared web view reads them to build its side panel, so the panel and
+          the contents page can never describe the pack differently. */}
       {specs.map((spec, i) => (
-        <Fragment key={spec.key}>{spec.render(firstContentPage + i, footer(firstContentPage + i))}</Fragment>
+        <div
+          key={spec.key}
+          id={`pk-sec-${spec.key}`}
+          data-pk-section={spec.key}
+          data-pk-title={spec.toc?.title ?? ''}
+          data-pk-page={firstContentPage + i}
+        >
+          {spec.render(firstContentPage + i, footer(firstContentPage + i))}
+        </div>
       ))}
     </div>
   )
