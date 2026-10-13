@@ -62,6 +62,7 @@ export function ReportTabs({ canBuildPacks }: { canBuildPacks: boolean }) {
     { to: '/reports', end: true, label: 'Report builder', show: true },
     { to: '/reports/pack', end: false, label: 'Board pack', show: canBuildPacks },
     { to: '/reports/library', end: false, label: 'Pack library', show: true },
+    { to: '/reports/export', end: false, label: 'Export', show: canBuildPacks },
   ].filter((t) => t.show)
   return (
     <div className="flex flex-wrap gap-1.5 mb-6 border-b border-stone-200 pb-3">

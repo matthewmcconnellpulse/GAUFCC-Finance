@@ -15,6 +15,7 @@ import { defaultBuilderState, fetchDefaultPeriod, type BuilderState } from './li
 import BuilderPage from './BuilderPage'
 import PackBuilderPage from './PackBuilderPage'
 import PackLibraryPage from './PackLibraryPage'
+import ExportPage from './ExportPage'
 import './reports.css'
 
 export default function ReportsPage() {
@@ -62,6 +63,10 @@ export default function ReportsPage() {
           }
         />
         <Route path="library" element={<PackLibraryPage />} />
+        <Route
+          path="export"
+          element={canBuildPacks ? <ExportPage /> : <Navigate to="/reports" replace />}
+        />
         <Route path="*" element={<Navigate to="/reports" replace />} />
       </Routes>
     </div>

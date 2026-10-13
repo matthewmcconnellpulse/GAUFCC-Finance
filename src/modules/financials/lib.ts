@@ -33,7 +33,7 @@ export interface XeroReport {
   Rows?: XeroReportRow[]
 }
 
-export type ReportName = 'ProfitAndLoss' | 'BalanceSheet'
+export type ReportName = 'ProfitAndLoss' | 'BalanceSheet' | 'TrialBalance'
 
 export interface ReportParams {
   fromDate?: string

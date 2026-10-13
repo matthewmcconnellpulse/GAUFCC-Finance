@@ -21,6 +21,14 @@ import { xeroFetch } from '../_shared/xero.ts'
 const REPORTS = {
   ProfitAndLoss: 'Reports/ProfitAndLoss',
   BalanceSheet: 'Reports/BalanceSheet',
+  // TrialBalance takes a single `date` and returns every account's debit and
+  // credit at it. It does NOT accept periods/timeframe, so a 24-month view
+  // costs 24 calls — which is why the Excel export asks before running it.
+  // It is read from Xero rather than assembled from BalanceSheet + P&L here
+  // because Xero's balance sheet already carries the current-year earnings in
+  // equity, so adding the profit and loss accounts on top would double-count
+  // the year's result and the trial balance would not prove.
+  TrialBalance: 'Reports/TrialBalance',
 } as const
 
 type ReportName = keyof typeof REPORTS
