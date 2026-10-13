@@ -120,8 +120,113 @@ export function presetRange(
   }
 }
 
+/**
+ * The same span of dates, a whole number of years earlier or later.
+ *
+ * 29 February has no counterpart in a common year, so the day is clamped to
+ * the month's last rather than rolled into March — rolling would push a
+ * period boundary into the following month and quietly change what is being
+ * compared.
+ */
+export function shiftYears(
+  range: { start: string; end: string },
+  years: number,
+): { start: string; end: string } {
+  const shift = (iso: string): string => {
+    const [y, m, d] = iso.split('-').map(Number)
+    const lastDay = new Date(y + years, m, 0).getDate()
+    return isoDate(new Date(y + years, m - 1, Math.min(d, lastDay)))
+  }
+  return { start: shift(range.start), end: shift(range.end) }
+}
+
 export function defaultPeriod(today = new Date()): Period {
   return { preset: 'fy', ...presetRange('fy', today) }
+}
+
+/**
+ * What a report opens on, as Pulse has configured it.
+ *
+ * 'latest_data_month' resolves from the ledger instead of the clock; the
+ * other two are an explicit override.
+ */
+export type ReportDefaultSetting =
+  | { mode: 'latest_data_month' }
+  | { mode: 'preset'; preset: Exclude<PeriodPreset, 'custom'> }
+  | { mode: 'fixed'; start: string; end: string }
+
+export const DEFAULT_REPORT_DEFAULT: ReportDefaultSetting = { mode: 'latest_data_month' }
+
+export interface ActivityMonth {
+  /** First of the month, ISO. */
+  month: string
+  lineCount: number
+}
+
+/**
+ * The most recent month the ledger is actually reporting on.
+ *
+ * Two things make this harder than "the last month with any rows", and the
+ * live ledger contains both:
+ *
+ *  - A single line dated September 2027, eleven months ahead. Taking the
+ *    maximum date would point every report in the system at an empty month
+ *    on the strength of one mis-dated entry, so anything after today is
+ *    ignored outright.
+ *  - The current month, part-posted — 36 lines on 13 October against a
+ *    ~245-line norm. Opening a management report on a fortnight of a month
+ *    reads as a collapse in activity, so a month only counts once it carries
+ *    a normal share of one: 40% of the median of the last twelve.
+ *
+ * The median is used rather than the mean because the odd 300-line month
+ * (year-end journals) would otherwise drag the bar up and skip a perfectly
+ * good month. Returns null for an empty ledger, where there is nothing to
+ * resolve and the caller falls back to the financial year.
+ */
+export function latestDataMonth(
+  months: ActivityMonth[],
+  today = new Date(),
+): ActivityMonth | null {
+  const todayKey = isoDate(today).slice(0, 7)
+  const past = months
+    .filter((m) => m.month.slice(0, 7) <= todayKey && m.lineCount > 0)
+    .sort((a, b) => b.month.localeCompare(a.month))
+  if (past.length === 0) return null
+
+  const recent = past
+    .slice(0, 12)
+    .map((m) => m.lineCount)
+    .sort((a, b) => a - b)
+  const median = recent[Math.floor(recent.length / 2)] ?? 0
+  const threshold = Math.max(1, median * 0.4)
+
+  return past.find((m) => m.lineCount >= threshold) ?? past[0]
+}
+
+/** The whole calendar month a given first-of-month belongs to. */
+function monthPeriod(firstOfMonth: string): Period {
+  const [y, m] = firstOfMonth.split('-').map(Number)
+  return {
+    preset: 'month',
+    start: isoDate(new Date(y, m - 1, 1)),
+    end: isoDate(new Date(y, m, 0)),
+  }
+}
+
+/** Turn the configured default plus the ledger's shape into a real period. */
+export function resolveDefaultPeriod(
+  setting: ReportDefaultSetting,
+  months: ActivityMonth[],
+  today = new Date(),
+): Period {
+  if (setting.mode === 'fixed') {
+    return { preset: 'custom', start: setting.start, end: setting.end }
+  }
+  if (setting.mode === 'preset') {
+    return { preset: setting.preset, ...presetRange(setting.preset, today) }
+  }
+  const latest = latestDataMonth(months, today)
+  return latest ? monthPeriod(latest.month) : defaultPeriod(today)
 }
 
 export function fyLabel(today = new Date()): string {
@@ -216,6 +321,58 @@ export interface BuilderState {
   scope: ReportScope
   groupType: FundType
   fundId: string | null
+}
+
+/** Live ledger line counts per month — counts only, no amounts. */
+export async function fetchActivityMonths(): Promise<ActivityMonth[]> {
+  const { data, error } = await supabase.rpc('ledger_activity_months')
+  if (error) throw new Error(error.message)
+  return ((data ?? []) as Array<{ month: string; line_count: number }>).map((r) => ({
+    month: r.month,
+    lineCount: Number(r.line_count) || 0,
+  }))
+}
+
+export async function fetchReportDefaultSetting(): Promise<ReportDefaultSetting> {
+  const { data, error } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', 'report_default_period')
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return parseReportDefault(data?.value)
+}
+
+/** Tolerant of anything stored by hand — an unreadable setting is not an outage. */
+export function parseReportDefault(value: unknown): ReportDefaultSetting {
+  if (!value || typeof value !== 'object') return DEFAULT_REPORT_DEFAULT
+  const v = value as Record<string, unknown>
+  if (v.mode === 'fixed' && typeof v.start === 'string' && typeof v.end === 'string') {
+    return { mode: 'fixed', start: v.start, end: v.end }
+  }
+  if (
+    v.mode === 'preset' &&
+    (v.preset === 'month' || v.preset === 'quarter' || v.preset === 'year' || v.preset === 'fy')
+  ) {
+    return { mode: 'preset', preset: v.preset }
+  }
+  return DEFAULT_REPORT_DEFAULT
+}
+
+/**
+ * Resolve the opening period for the whole reports area. Never throws: a
+ * report that cannot reach the setting still opens, on the financial year.
+ */
+export async function fetchDefaultPeriod(today = new Date()): Promise<Period> {
+  try {
+    const [setting, months] = await Promise.all([
+      fetchReportDefaultSetting(),
+      fetchActivityMonths().catch(() => [] as ActivityMonth[]),
+    ])
+    return resolveDefaultPeriod(setting, months, today)
+  } catch {
+    return defaultPeriod(today)
+  }
 }
 
 export function defaultBuilderState(): BuilderState {
@@ -436,10 +593,20 @@ export async function fetchPacks(): Promise<BoardPack[]> {
   return (data ?? []) as BoardPack[]
 }
 
-/** Signed download link for a saved pack in the 'packs' bucket. */
+/**
+ * Signed download link for a saved pack in the 'packs' bucket.
+ *
+ * The path is signed verbatim. generate-pack uploads to a key that itself
+ * begins 'packs/' *inside* the bucket also called 'packs', and stores that
+ * same full string in board_packs.storage_path — which is what the
+ * packs_select_trustee policy joins on (bp.storage_path =
+ * storage.objects.name, migration 0015). Stripping the prefix here asked
+ * Storage for an object that does not exist, so every library download would
+ * have failed with "Object not found". Fixing it on this side rather than in
+ * generate-pack keeps the policy join and any already-stored rows correct.
+ */
 export async function signedPackUrl(storagePath: string, expiresIn = 3600): Promise<string> {
-  const path = storagePath.startsWith('packs/') ? storagePath.slice('packs/'.length) : storagePath
-  const { data, error } = await supabase.storage.from('packs').createSignedUrl(path, expiresIn)
+  const { data, error } = await supabase.storage.from('packs').createSignedUrl(storagePath, expiresIn)
   if (error) throw new Error(error.message)
   return data.signedUrl
 }

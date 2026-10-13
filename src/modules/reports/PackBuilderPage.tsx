@@ -71,6 +71,7 @@ import {
   monthKeysInPeriod,
   periodLabel,
   presetRange,
+  shiftYears,
   scopeDescription,
   trackingIdsForFunds,
   type BuilderState,
@@ -234,10 +235,19 @@ export default function PackBuilderPage({
     async () => {
       const settings = managementSettings.data
       if (!settings?.xeroBudgetId) return null
+      // Last year's budget is read for the SAME span, shifted back twelve
+      // months. Without a range Xero returns the whole budget year, so a
+      // six-month actual was being set against a twelve-month budget and
+      // reported as a variance — a comparison that is wrong by construction
+      // and says nothing about it on the page.
+      const priorRange = shiftYears({ start: state.period.start, end: state.period.end }, -1)
       const [current, prior] = await Promise.all([
         fetchBudgetDetail(settings.xeroBudgetId, { from: state.period.start, to: state.period.end }),
         settings.xeroPriorBudgetId
-          ? fetchBudgetDetail(settings.xeroPriorBudgetId).catch(() => null)
+          ? fetchBudgetDetail(settings.xeroPriorBudgetId, {
+              from: priorRange.start,
+              to: priorRange.end,
+            }).catch(() => null)
           : Promise.resolve(null),
       ])
       return { current, prior }

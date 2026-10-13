@@ -12,6 +12,7 @@ import type { WarningRules } from '@/types/db'
 import { SETTING_KEYS } from '@/types/db'
 import { fetchSettings, settingValue, updateSettingValue } from './lib'
 import { SectionCard } from './components'
+import ReportDefaultCard from './ReportDefaultCard'
 
 const DAYS = Array.from({ length: 28 }, (_, i) => i + 1)
 
@@ -173,6 +174,9 @@ export default function GeneralTab() {
           ) : null}
         </div>
       </SectionCard>
+
+      {/* What a report opens on */}
+      <ReportDefaultCard />
 
       {/* Sync hour */}
       <SectionCard title="Nightly sync" hint="The pg_cron schedule mirrors this value.">

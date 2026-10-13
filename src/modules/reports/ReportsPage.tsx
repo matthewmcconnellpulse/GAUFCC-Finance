@@ -7,11 +7,11 @@
  * Builder state (period + scope) lives here so it survives tab switches and
  * flows straight into the pack generator.
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { usePermissions } from '@/auth/AuthProvider'
 import { ReportTabs } from './components'
-import { defaultBuilderState, type BuilderState } from './lib'
+import { defaultBuilderState, fetchDefaultPeriod, type BuilderState } from './lib'
 import BuilderPage from './BuilderPage'
 import PackBuilderPage from './PackBuilderPage'
 import PackLibraryPage from './PackLibraryPage'
@@ -22,16 +22,40 @@ export default function ReportsPage() {
   const canBuildPacks = isPulse || isCeo
   const [builder, setBuilder] = useState<BuilderState>(defaultBuilderState)
 
+  /**
+   * The configured opening period, applied once the ledger has answered.
+   *
+   * The synchronous default (this financial year) renders first so there is
+   * never a blank builder, then the resolved default replaces it — unless the
+   * reader has already chosen a period in the meantime, which would be
+   * infuriating to have snatched back a moment after clicking.
+   */
+  const chosen = useRef(false)
+  const change = (next: BuilderState) => {
+    chosen.current = true
+    setBuilder(next)
+  }
+  useEffect(() => {
+    let cancelled = false
+    void fetchDefaultPeriod().then((period) => {
+      if (cancelled || chosen.current) return
+      setBuilder((b) => ({ ...b, period }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <div>
       <ReportTabs canBuildPacks={canBuildPacks} />
       <Routes>
-        <Route index element={<BuilderPage state={builder} onChange={setBuilder} />} />
+        <Route index element={<BuilderPage state={builder} onChange={change} />} />
         <Route
           path="pack"
           element={
             canBuildPacks ? (
-              <PackBuilderPage state={builder} onChange={setBuilder} />
+              <PackBuilderPage state={builder} onChange={change} />
             ) : (
               <Navigate to="/reports" replace />
             )
