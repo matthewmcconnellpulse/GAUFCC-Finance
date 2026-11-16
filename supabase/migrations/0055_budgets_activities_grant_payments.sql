@@ -247,7 +247,11 @@ create table if not exists public.fund_payments (
   created_by uuid references public.profiles (id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique nulls not distinct (distribution_id, distribution_payee_id, instalment_index)
+  -- Plain UNIQUE (nulls distinct), deliberately: a payment entered by hand has
+  -- no schedule, payee or instalment, and "nulls not distinct" would allow only
+  -- one such payment in the whole system. Schedule-generated rows are all
+  -- non-null, so they still cannot be generated twice.
+  unique (distribution_id, distribution_payee_id, instalment_index)
 );
 
 create index if not exists fund_payments_fund_date_idx on public.fund_payments (fund_id, pay_date);
